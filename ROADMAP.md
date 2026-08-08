@@ -135,4 +135,8 @@
 
 | Tarih | Faz | Ne Yapıldı |
 |-------|-----|------------|
-| 08.08.2026 | 1 | Proje başlatıldı, README + ROADMAP yazıldı |
+| 08.08.2026 | 0 | Proje başlatıldı, README + ROADMAP yazıldı |
+| 08.08.2026 | 0 | GitHub repo: https://github.com/tinyrlabs/tinydrone (private) |
+| 08.08.2026 | 0 | Simülasyon iskeleti (detector + display + main, C11) |
+| 08.08.2026 | 0 | Dataset pipeline: Kaggle + HuggingFace download scripts |
+| 08.08.2026 | 0 | Gerçek veri indiriliyor: Kaggle (15K+ görsel) + HF |
