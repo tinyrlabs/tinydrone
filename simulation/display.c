@@ -81,6 +81,8 @@ void display_render(const RGB *frame, int w, int h,
                 (x == bx || x == bx + bw - 1 ||
                  y == by || y == by + bh - 1) &&
                 x >= bx && x < bx + bw && y >= by && y < by + bh);
+            
+            if (on_border) {
                 /* Bounding box border */
                 printf(CSI "42m  " RESET);  /* Green border */
             } else {

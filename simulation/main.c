@@ -139,7 +139,8 @@ int main(void) {
                        tracker.pan_angle, tracker.tilt_angle);
 
         /* Simulate ~30fps */
-        usleep(33000);
+        struct timespec ts = {0, 33000000};  /* 33ms */
+        nanosleep(&ts, NULL);
     }
 
     display_cleanup();
