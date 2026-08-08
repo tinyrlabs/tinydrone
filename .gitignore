@@ -1,0 +1,36 @@
+# Build artifacts
+build/
+*.o
+*.a
+*.so
+
+# Dataset (generated, not tracked)
+training/dataset/raw/
+training/dataset/processed/
+training/dataset/_xview_raw/
+training/dataset/_visdrone_cache/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# ESP-IDF
+firmware/build/
+firmware/sdkconfig
+firmware/sdkconfig.old
+firmware/dependencies.lock
+firmware/managed_components/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Hermes plans
+.hermes/
