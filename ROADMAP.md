@@ -139,4 +139,6 @@
 | 08.08.2026 | 0 | GitHub repo: https://github.com/tinyrlabs/tinydrone (private) |
 | 08.08.2026 | 0 | Simülasyon iskeleti (detector + display + main, C11) |
 | 08.08.2026 | 0 | Dataset pipeline: Kaggle + HuggingFace download scripts |
-| 08.08.2026 | 0 | Gerçek veri indiriliyor: Kaggle (15K+ görsel) + HF |
+| 08.08.2026 | 1 | CNN modülü: Conv2D + MaxPool2D + CNN API (tinycml) |
+| 08.08.2026 | 1 | 14 yeni test, 38 test paketi geçti, 0 warning |
+| 08.08.2026 | 1 | Push: tinyrlabs/tinycml (317977b) — ~1400 LOC |
