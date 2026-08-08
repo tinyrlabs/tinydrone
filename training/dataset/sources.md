@@ -51,16 +51,20 @@ Gerçek veri setlerine erişim sınırlı olduğu için, Faz 0'da ağırlıklı 
 
 ⚠️ **Uyarı:** Sentetik veri, gerçek dünya performansını garanti etmez. Production deployment öncesi gerçek veri ile eğitim şart.
 
-## Veri Seti İstatistikleri
+## Veri Seti İstatistikleri (Final)
 
-| Sınıf | Ham (raw) | Train | Val | Test | Kaynak |
-|-------|-----------|-------|-----|------|--------|
-| tank | 500 | 350 | 75 | 75 | Sentetik |
-| armored_vehicle | 500 | 350 | 75 | 75 | Sentetik |
-| military_building | 500 | 350 | 75 | 75 | Sentetik |
-| drone_uav | 500 | 350 | 75 | 75 | Sentetik |
-| background | 500 | 350 | 75 | 75 | Sentetik |
-| **Toplam** | **2,500** | **1,750** | **375** | **375** | |
+| Sınıf | Train | Val | Test | Toplam | Kaynak |
+|-------|-------|-----|------|--------|--------|
+| tank | 114 | 24 | 26 | 164 | Kaggle DS4: UAV Battle Tank Detection |
+| armored_vehicle | 5.605 | 1.201 | 1.202 | 8.008 | Kaggle DS2: Normal vs Military Vehicles |
+| drone_uav | 3.666 | 1.112 | 1.128 | 8.028 | Kaggle DS5+DS6: Drone YOLO + Amateur UAV |
+| background | 6.611 | 1.416 | 1.418 | 9.445 | Kaggle DS2: Other (civilian vehicles) |
+| military_building | 0 | 0 | 0 | 0 | ⏳ Pending (COCO/Places365) |
+| **Toplam** | **15.996** | **3.753** | **3.774** | **23.523** | **4 Kaggle datasets** |
+
+**Format:** 32×32 RGB PNG  
+**Disk boyutu:** ~94MB (processed)  
+**Split:** 70% train / 15% val / 15% test
 
 ## Geliştirme Notları
 
