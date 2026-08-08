@@ -141,4 +141,6 @@
 | 08.08.2026 | 0 | Dataset pipeline: Kaggle + HuggingFace download scripts |
 | 08.08.2026 | 1 | CNN modülü: Conv2D + MaxPool2D + CNN API (tinycml) |
 | 08.08.2026 | 1 | 14 yeni test, 38 test paketi geçti, 0 warning |
-| 08.08.2026 | 1 | Push: tinyrlabs/tinycml (317977b) — ~1400 LOC |
+| 08.08.2026 | 1 | CNN backward pass: Conv2D + MaxPool2D backprop |
+| 08.08.2026 | 1 | 17 CNN test, 38 suite, 0 warning |
+| 08.08.2026 | 2 | C training foundation: train_c.c + stb_image |
