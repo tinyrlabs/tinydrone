@@ -170,11 +170,10 @@ static Matrix* cnn_forward_backward(CNNModel *net, const Matrix *input,
                 break;
             }
             case CNN_LAYER_RELU: {
-                /* In-place ReLU */
-                for (size_t j = 0; j < current->rows * current->cols; j++)
-                    if (current->data[j] < 0.0) current->data[j] = 0.0;
-                next = current;
-                current = NULL;
+                /* Create new matrix for post-ReLU values (don't modify cache in-place) */
+                next = matrix_copy(current);
+                for (size_t j = 0; j < next->rows * next->cols; j++)
+                    if (next->data[j] < 0.0) next->data[j] = 0.0;
                 break;
             }
             case CNN_LAYER_MAXPOOL: {
@@ -205,7 +204,9 @@ static Matrix* cnn_forward_backward(CNNModel *net, const Matrix *input,
             default:
                 break;
         }
-        if (current && current != next) matrix_free(current);
+        if (current && current != next && current != input) {
+            /* Don't free intermediate results — cached for backward pass */;
+        }
         current = next;
     }
 
@@ -215,7 +216,6 @@ static Matrix* cnn_forward_backward(CNNModel *net, const Matrix *input,
 static void cnn_backward_pass(CNNModel *net, Matrix *dout,
                                Matrix **cache_outputs) {
     Matrix *dcurrent = dout;
-    Matrix *dprev = NULL;
 
     for (int i = net->n_blocks - 1; i >= 0; i--) {
         CNNBlock *block = net->blocks[i];
@@ -223,24 +223,23 @@ static void cnn_backward_pass(CNNModel *net, Matrix *dout,
         switch (block->type) {
             case CNN_LAYER_CONV2D: {
                 Conv2D *conv = (Conv2D*)block->layer;
-                dprev = conv2d_backward(conv, dcurrent);
+                Matrix *dprev = conv2d_backward(conv, dcurrent);
                 conv2d_update_weights(conv, LEARNING_RATE);
                 if (dcurrent != dout) matrix_free(dcurrent);
                 dcurrent = dprev;
                 break;
             }
             case CNN_LAYER_RELU: {
-                /* ReLU backward: gradient passes through where input was > 0 */
-                Matrix *input = cache_outputs[i];
+                /* ReLU backward: gradient passes through where pre-activation > 0 */
+                Matrix *pre_relu = cache_outputs[i];
                 for (size_t j = 0; j < dcurrent->rows * dcurrent->cols; j++) {
-                    if (input->data[j] <= 0.0) dcurrent->data[j] = 0.0;
+                    if (pre_relu->data[j] <= 0.0) dcurrent->data[j] = 0.0;
                 }
-                dprev = dcurrent;
                 break;
             }
             case CNN_LAYER_MAXPOOL: {
                 MaxPool2D *pool = (MaxPool2D*)block->layer;
-                dprev = maxpool2d_backward(pool, dcurrent);
+                Matrix *dprev = maxpool2d_backward(pool, dcurrent);
                 if (dcurrent != dout) matrix_free(dcurrent);
                 dcurrent = dprev;
                 break;
@@ -249,53 +248,50 @@ static void cnn_backward_pass(CNNModel *net, Matrix *dout,
                 void **ptr = (void**)block->layer;
                 Matrix *w = (Matrix*)ptr[0];
                 Matrix *b = (Matrix*)ptr[1];
-                
-                /* ReLU backward for dense layer */
                 Matrix *input_cache = cache_outputs[i];
+
+                /* ReLU backward for dense layer (if applicable) */
                 if (block->activation == ACTIVATION_RELU) {
                     for (size_t j = 0; j < dcurrent->rows * dcurrent->cols; j++) {
                         if (input_cache->data[j] <= 0.0) dcurrent->data[j] = 0.0;
                     }
                 }
-                
-                /* d_input = dcurrent × w^T */
-                Matrix *wT = matrix_transpose(w);
-                dprev = matrix_matmul(dcurrent, wT);
-                matrix_free(wT);
-                
-                /* d_weight = input^T × dcurrent */
+
+                /* d_weights = input^T × dcurrent */
                 Matrix *inputT = matrix_transpose(input_cache);
                 Matrix *dw = matrix_matmul(inputT, dcurrent);
                 matrix_free(inputT);
-                
-                /* d_bias = sum of dcurrent per column */
+
+                /* Update weights */
+                for (size_t j = 0; j < w->rows * w->cols; j++)
+                    w->data[j] -= LEARNING_RATE * dw->data[j];
+                matrix_free(dw);
+
+                /* Update bias */
                 for (size_t c = 0; c < b->cols; c++) {
                     double sum = 0.0;
                     for (size_t r = 0; r < dcurrent->rows; r++)
                         sum += dcurrent->data[r * dcurrent->cols + c];
                     b->data[c] -= LEARNING_RATE * sum;
                 }
-                
-                /* Update weights */
-                for (size_t j = 0; j < w->rows * w->cols; j++)
-                    w->data[j] -= LEARNING_RATE * dw->data[j];
-                matrix_free(dw);
-                
+
+                /* d_input = dcurrent × w^T (propagate gradient backward) */
+                Matrix *wT = matrix_transpose(w);
+                Matrix *dprev = matrix_matmul(dcurrent, wT);
+                matrix_free(wT);
+
                 if (dcurrent != dout) matrix_free(dcurrent);
                 dcurrent = dprev;
                 break;
             }
-            default:
+            case CNN_LAYER_FLATTEN:
+            case CNN_LAYER_SOFTMAX:
                 break;
-        }
-
-        /* Free cached input if it's no longer needed */
-        if (cache_outputs[i] && i > 0) {
-            /* Keep cache for gradient computation */
         }
     }
 
-    if (dcurrent && dcurrent != dout) matrix_free(dcurrent);
+    /* Free final gradient (d_input to first layer) */
+    if (dcurrent != dout) matrix_free(dcurrent);
 }
 
 /* ============================================
@@ -416,11 +412,6 @@ int main(int argc, char **argv) {
             matrix_free(output);
             matrix_free(dout);
             free(batch_y);
-
-            /* Clean up caches */
-            for (int i = 0; i < n_blocks; i++) {
-                if (cache[i]) { matrix_free(cache[i]); cache[i] = NULL; }
-            }
 
             batches++;
         }
