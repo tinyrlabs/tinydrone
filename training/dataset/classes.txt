@@ -1,0 +1,43 @@
+# tinydrone — Askeri Hedef Sınıfları
+
+## Sınıf Tanımları
+
+### 1. tank
+Ana muharebe tankları (MBT), kundağı motorlu topçu sistemleri.
+- **OpenImages MID:** /m/07cmd (Tank)
+- **xView class IDs:** 11, 14, 15, 73
+- **Örnek:** M1 Abrams, T-90, Leopard 2, K9 Thunder
+- **Ayırt edici özellikler:** Paletli, uzun namlulu top, alçak profil
+
+### 2. armored_vehicle
+Zırhlı personel taşıyıcı (APC), piyade savaş aracı (IFV), askeri kamyon.
+- **OpenImages MID:** /m/02kw3q (Armored car), /m/029fjf (Military vehicle)
+- **xView class IDs:** 17, 18, 19, 61
+- **Örnek:** BTR-80, M2 Bradley, Humvee, Ural-4320
+- **Ayırt edici özellikler:** Tekerlekli/zırhlı, kutu gövde, tanktan küçük
+
+### 3. military_building
+Askeri üs yapıları, hangarlar, gözetleme kuleleri, barikatlar.
+- **OpenImages MID:** /m/0cgh4 (Building — subset)
+- **xView class IDs:** 74
+- **Örnek:** Hangar, beton barınak, gözetleme kulesi, askeri karargah
+- **Ayırt edici özellikler:** Dikdörtgen yapılar, kamuflaj desenleri, izole konum
+
+### 4. drone_uav
+İnsansız hava araçları (İHA), quadcopter, sabit kanatlı dronelar.
+- **OpenImages MID:** /m/0c236 (Helicopter), /m/01df0n (Military aircraft)
+- **Örnek:** DJI Phantom, MQ-9 Reaper, Bayraktar TB2, quadcopter
+- **Ayırt edici özellikler:** Havada, rotor/kanat, küçük boyut
+
+### 5. background
+Hedef OLMAYAN sahneler: boş arazi, orman, deniz, gökyüzü, sivil binalar.
+- **Kaynak:** VisDrone, COCO (negative samples), sentetik
+- **Önem:** False positive oranını düşürmek için kritik negatif sınıf
+
+## Hedef Görüntü Özellikleri
+
+Tüm sınıflar için hedef görüntü formatı:
+- **Çözünürlük:** 32×32 RGB (tinycml CNN input)
+- **Perspektif:** Drone kamerası (üstten/belli açılı)
+- **Işık:** Gün ışığı, çeşitli hava koşulları
+- **Arka plan:** Doğal arazi (çim, toprak, kum, kar)
