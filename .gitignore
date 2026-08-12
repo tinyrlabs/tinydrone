@@ -15,6 +15,12 @@ __pycache__/
 *.pyc
 .venv/
 
+# Training outputs
+training/output/
+training/*.bin
+training/train_tinydrone
+training/train_dbg
+
 # ESP-IDF
 firmware/build/
 firmware/sdkconfig

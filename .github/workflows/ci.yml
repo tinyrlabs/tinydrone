@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compiler: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout tinycml dependency
+        uses: actions/checkout@v4
+        with:
+          repository: tinyrlabs/tinycml
+          path: deps/tinycml
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build tinycml
+        run: make -C deps/tinycml static
+
+      - name: Build simulation
+        run: |
+          make -C deps/tinycml tests
+          make sim
+
+      - name: Run tinycml CNN tests
+        run: |
+          cd deps/tinycml
+          ./build/tests/test_conv2d
+          ./build/tests/test_pool2d
+          ./build/tests/test_cnn
+
+      - name: Verify dataset pipeline syntax
+        run: |
+          python3 -m py_compile training/train_cnn.py
+          python3 -m py_compile training/categorize_final.py
+
+  dataset-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Verify class taxonomy
+        run: |
+          test -f training/dataset/classes.txt
+          grep -q "tank" training/dataset/classes.txt
+          grep -q "drone_uav" training/dataset/classes.txt
+          grep -q "background" training/dataset/classes.txt
