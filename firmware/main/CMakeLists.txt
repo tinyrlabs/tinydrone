@@ -2,7 +2,7 @@ idf_component_register(
     SRCS
         "main.c"
         "camera.c"
-        "inference.c"
+        "inference_int8.c"
         "tracker.c"
     INCLUDE_DIRS
         "."

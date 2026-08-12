@@ -20,7 +20,7 @@
 #include "esp_timer.h"
 
 #include "camera.h"
-#include "inference.h"
+#include "inference_int8.h"  /* int8 — ESP32 için 4x hızlı */
 #include "tracker.h"
 
 static const char *TAG = "tinydrone";
@@ -53,8 +53,8 @@ void app_main(void) {
     }
     ESP_LOGI(TAG, "Kamera OK (QQVGA RGB565)");
 
-    inference_init();
-    ESP_LOGI(TAG, "tinycml CNN modeli yüklendi");
+    inference_int8_init();
+    ESP_LOGI(TAG, "tinycml CNN modeli yüklendi (int8)");
 
     tracker_init();
     ESP_LOGI(TAG, "Servolar OK");
@@ -74,7 +74,7 @@ void app_main(void) {
         }
 
         /* 2. Sınıflandır */
-        int pred = inference_run(frame, probs);
+        int pred = inference_int8_run(frame, probs);
         frame_count++;
 
         /* 3. Takip kararı */

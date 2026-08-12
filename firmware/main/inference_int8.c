@@ -14,7 +14,7 @@
 #include <stdlib.h>
 
 #include "tinydrone_model_int8.h"
-#include "tinydrone_model.h"  /* float bias değerleri için */
+#include "model.h"  /* float bias değerleri (tinydrone_model.h kopyası) */
 
 #define IMG_H 32
 #define IMG_W 32
