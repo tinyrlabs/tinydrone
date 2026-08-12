@@ -48,3 +48,7 @@ demo
 evaluate
 train_asan
 train_tinydrone
+
+# Firmware test artifacts
+firmware/test_fi
+firmware/dataset

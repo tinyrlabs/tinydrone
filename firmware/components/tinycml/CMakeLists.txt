@@ -3,6 +3,7 @@ idf_component_register(
         "src/matrix.c"
         "src/conv2d.c"
         "src/pool2d.c"
+        "src/cml_error.c"
     INCLUDE_DIRS
         "include"
 )
