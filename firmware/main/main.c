@@ -35,6 +35,12 @@ static const char *TAG = "tinydrone";
 static const int TARGET_CLASSES[] = {CLASS_TANK, CLASS_ARMORED, CLASS_DRONE};
 #define N_TARGET_CLASSES 3
 
+static int is_target_class(int c) {
+    for (int i = 0; i < N_TARGET_CLASSES; i++)
+        if (TARGET_CLASSES[i] == c) return 1;
+    return 0;
+}
+
 /* Hedef güven eşiği — %60 üstü askeri hedef say */
 #define CONF_THRESHOLD 0.60
 
@@ -72,7 +78,7 @@ void app_main(void) {
         frame_count++;
 
         /* 3. Takip kararı */
-        if (pred >= 0 && pred < N_TARGET_CLASSES && probs[pred] >= CONF_THRESHOLD) {
+        if (is_target_class(pred) && probs[pred] >= CONF_THRESHOLD) {
             /* Basit takip: hedef merkezde varsay, servo sabit.
              * Gerçek bounding box tespiti için sliding window gerekir (Faz 4.5) */
             tracker_update(0.0, 0.0);

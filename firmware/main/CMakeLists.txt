@@ -7,7 +7,7 @@ idf_component_register(
     INCLUDE_DIRS
         "."
     REQUIRES
-        esp_camera
+        esp32-camera
         driver
         esp_timer
         tinycml
