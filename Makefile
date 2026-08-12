@@ -1,27 +1,43 @@
 # tinydrone — Build System
 #
 # Targets:
-#   make sim       — Build desktop simulation
-#   make test      — Build and run unit tests
+#   make sim        — Desktop simulation (color-based detector)
+#   make demo       — CNN terminal demo (model tahminleri + ASCII)
+#   make evaluate   — Test seti doğruluğu
+#   make confusion  — Confusion matrix analizi
+#   make test       — Build and run unit tests
 #   make clean
 
-CC       = cc
-CFLAGS   = -std=c11 -Wall -Wextra -pedantic -O2 -g -D_POSIX_C_SOURCE=200809L
-LDFLAGS  = -lm
+CC        = cc
+CFLAGS    = -std=c11 -Wall -Wextra -pedantic -O2 -g -D_POSIX_C_SOURCE=200809L
+LDFLAGS   = -lm
 
 BUILD_DIR  = build
 SIM_DIR    = simulation
+TRAIN_DIR  = training
+TINYCML    = /home/ubuntu/projects/tinycml
+TINYCML_INC = $(TINYCML)/include
+TINYCML_LIB = $(TINYCML)/build/lib/libtinycml.a
+MODEL_DIR  = $(TRAIN_DIR)/output
+
 SIM_SRCS   = $(SIM_DIR)/main.c $(SIM_DIR)/detector.c $(SIM_DIR)/display.c
 SIM_OBJS   = $(patsubst $(SIM_DIR)/%.c,$(BUILD_DIR)/%.o,$(SIM_SRCS))
 SIM_TARGET = $(BUILD_DIR)/sim_tinydrone
+
+DEMO_SRC     = $(TRAIN_DIR)/demo.c
+EVAL_SRC     = $(TRAIN_DIR)/evaluate.c
+CONF_SRC     = $(TRAIN_DIR)/confusion.c
+DEMO_TARGET  = $(BUILD_DIR)/demo
+EVAL_TARGET  = $(BUILD_DIR)/evaluate
+CONF_TARGET  = $(BUILD_DIR)/confusion
 
 TEST_DIR   = tests
 TEST_SRCS  = $(wildcard $(TEST_DIR)/*.c)
 TEST_BINS  = $(patsubst $(TEST_DIR)/%.c,$(BUILD_DIR)/test_%,$(TEST_SRCS))
 
-.PHONY: all sim test clean
+.PHONY: all sim demo evaluate confusion test clean
 
-all: sim
+all: sim demo evaluate confusion
 
 sim: $(SIM_TARGET)
 
@@ -35,6 +51,31 @@ $(BUILD_DIR)/%.o: $(SIM_DIR)/%.c | $(BUILD_DIR)
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
+
+# CNN araçları (model header output/ içinde olmalı)
+demo: $(DEMO_TARGET)
+
+$(DEMO_TARGET): $(DEMO_SRC) $(TINYCML_LIB) $(MODEL_DIR)/tinydrone_model.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -I$(TINYCML_INC) -I$(TRAIN_DIR) -I$(MODEL_DIR) \
+		$(DEMO_SRC) $(TINYCML_LIB) -o $@ $(LDFLAGS)
+	@echo "  BUILD  $@"
+	@echo "  Run: ./$(DEMO_TARGET) training/dataset/processed"
+
+evaluate: $(EVAL_TARGET)
+
+$(EVAL_TARGET): $(EVAL_SRC) $(TINYCML_LIB) $(MODEL_DIR)/tinydrone_model.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -I$(TINYCML_INC) -I$(TRAIN_DIR) -I$(MODEL_DIR) \
+		$(EVAL_SRC) $(TINYCML_LIB) -o $@ $(LDFLAGS)
+	@echo "  BUILD  $@"
+	@echo "  Run: ./$(EVAL_TARGET) training/dataset/processed"
+
+confusion: $(CONF_TARGET)
+
+$(CONF_TARGET): $(CONF_SRC) $(TINYCML_LIB) $(MODEL_DIR)/tinydrone_model.h | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -I$(TINYCML_INC) -I$(TRAIN_DIR) -I$(MODEL_DIR) \
+		$(CONF_SRC) $(TINYCML_LIB) -o $@ $(LDFLAGS)
+	@echo "  BUILD  $@"
+	@echo "  Run: ./$(CONF_TARGET) training/dataset/processed"
 
 test: $(TEST_BINS)
 	@passed=0; total=0; \

@@ -128,7 +128,6 @@ static int eval_dir(const char *path, int expected_class,
 
 int main(int argc, char **argv) {
     const char *data_root = argc > 1 ? argv[1] : "dataset/processed";
-    int max_imgs = argc > 2 ? atoi(argv[2]) : 0;  /* 0 = all */
 
     printf("tinydrone — Model Evaluation\n");
     printf("=============================\n");
