@@ -1,0 +1,20 @@
+# ESP32-CAM (AI-Thinker) sdkconfig örnekleri
+#
+# Kullanım: idf.py build öncesi bu ayarlar sdkconfig'e kopyalanır veya
+# menuconfig'ten set edilir.
+
+# PSRAM zorunlu (kamera frame buffer)
+CONFIG_ESP32_SPIRAM_SUPPORT=y
+CONFIG_SPIRAM_USE_MALLOC=y
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=100
+
+# Log seviyesi
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# LEDC (servolar)
+CONFIG_LEDC_CTRL_FUNC_IN_IRAM=n
+
+# main task stack — CNN inference stack kullanır
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384

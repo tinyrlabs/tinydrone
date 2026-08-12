@@ -1,0 +1,14 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "camera.c"
+        "inference.c"
+        "tracker.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        esp_camera
+        driver
+        esp_timer
+        tinycml
+)
