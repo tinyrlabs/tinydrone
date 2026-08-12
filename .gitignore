@@ -40,3 +40,4 @@ Thumbs.db
 
 # Hermes plans
 .hermes/
+train_asan build/*.bin
