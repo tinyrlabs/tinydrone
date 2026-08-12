@@ -149,3 +149,6 @@
 | 12.08.2026 | 2 | Model: output/tinydrone_model.h (1.7MB C header) |
 | 12.08.2026 | 4 | Firmware build OK: tinydrone.bin 1.4MB (ESP-IDF v5.3.2) |
 | 12.08.2026 | 4 | 2MB app partition, esp32-camera 2.1.7, servo tracker |
+| 12.08.2026 | 4.5 | int8 quantization: %85.93 (float uyum %99.62), 0.41MB |
+| 12.08.2026 | 4.5 | Sliding window: coarse-to-fine, bbox + servo offset |
+| 12.08.2026 | 2 | Tank +1079 görsel: %69→%79, armored %72→%87, genel %89.54 |
