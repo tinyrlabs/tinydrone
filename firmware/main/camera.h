@@ -23,4 +23,13 @@ int camera_init(void);
  */
 int camera_capture_32x32(double *out);
 
+/**
+ * Capture raw RGB888 frame (160x120, row-major, 3 bytes/pixel).
+ * Sliding window tespiti için.
+ *
+ * @param out  buffer (160*120*3 bytes)
+ * @return 0 on success, -1 on failure
+ */
+int camera_capture_frame(uint8_t *out);
+
 #endif /* TINYDRONE_CAMERA_H */

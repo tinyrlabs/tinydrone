@@ -106,3 +106,28 @@ int camera_capture_32x32(double *out) {
     esp_camera_fb_return(fb);
     return 0;
 }
+
+int camera_capture_frame(uint8_t *out) {
+    camera_fb_t *fb = esp_camera_fb_get();
+    if (!fb) return -1;
+
+    if (fb->format != PIXFORMAT_RGB565 || fb->width != 160 || fb->height != 120) {
+        esp_camera_fb_return(fb);
+        return -1;
+    }
+
+    /* RGB565 → RGB888 */
+    uint16_t *pixels = (uint16_t *)fb->buf;
+    for (int i = 0; i < 160 * 120; i++) {
+        uint16_t p = pixels[i];
+        out[i * 3 + 0] = (p >> 11) & 0x1F;
+        out[i * 3 + 1] = (p >> 5) & 0x3F;
+        out[i * 3 + 2] = p & 0x1F;
+        out[i * 3 + 0] <<= 3;  /* 5-bit → 8-bit */
+        out[i * 3 + 1] <<= 2;  /* 6-bit → 8-bit */
+        out[i * 3 + 2] <<= 3;
+    }
+
+    esp_camera_fb_return(fb);
+    return 0;
+}

@@ -3,6 +3,7 @@ idf_component_register(
         "main.c"
         "camera.c"
         "inference_int8.c"
+        "sliding_window.c"
         "tracker.c"
     INCLUDE_DIRS
         "."
