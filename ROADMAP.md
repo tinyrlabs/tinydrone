@@ -147,3 +147,5 @@
 | 12.08.2026 | 2 | Eğitim tamamlandı: 10 epoch, loss 0.641→0.170 |
 | 12.08.2026 | 2 | Test doğruluğu: %88.87 (drone 98%, background 96%) |
 | 12.08.2026 | 2 | Model: output/tinydrone_model.h (1.7MB C header) |
+| 12.08.2026 | 4 | Firmware build OK: tinydrone.bin 1.4MB (ESP-IDF v5.3.2) |
+| 12.08.2026 | 4 | 2MB app partition, esp32-camera 2.1.7, servo tracker |
