@@ -144,3 +144,6 @@
 | 08.08.2026 | 1 | CNN backward pass: Conv2D + MaxPool2D backprop |
 | 08.08.2026 | 1 | 17 CNN test, 38 suite, 0 warning |
 | 08.08.2026 | 2 | C training foundation: train_c.c + stb_image |
+| 12.08.2026 | 2 | Eğitim tamamlandı: 10 epoch, loss 0.641→0.170 |
+| 12.08.2026 | 2 | Test doğruluğu: %88.87 (drone 98%, background 96%) |
+| 12.08.2026 | 2 | Model: output/tinydrone_model.h (1.7MB C header) |
