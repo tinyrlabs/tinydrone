@@ -257,11 +257,33 @@ git clone tinyrlabs/tinydrone && cd tinydrone/simulation
 - **Gazebo opsiyonu:** Laptop OS'una göre (Linux: Gazebo; Windows: WSL2; Mac: Webots) — çalışmazsa Panel 1 Python görselleştiriciyle doldurulur
 - **Geliştirme sunucuda, gösterim laptopta:** Kod tek repo, iki ortam — aynı CNN, aynı senaryolar
 
-### 8.5 Laptop Bilinmeyenleri (başlamadan netleşecek)
+### 8.5 Laptop Bilgileri (netleşti)
 
-1. İşletim sistemi? (Windows / macOS / Linux)
-2. GPU? (NVIDIA / AMD / Intel — opsiyonel render için)
-3. Sunumda internet var mı? (yoksa tamamen lokal çalışmalı — tasarım zaten lokal)
+**MSI Thin 15** — Windows 11, NVIDIA RTX 4050 (6GB VRAM), GPU'lu
+
+| Karar | Sonuç |
+|-------|-------|
+| OS: Windows | Python native çalışır; Gazebo Windows'ta zor → WSL2 gerekir |
+| GPU: RTX 4050 | 3D render için harika (moderngl/Webots); CNN için gerekmez (CPU yeterli) |
+| Gazebo stratejisi | Windows'ta native Gazebo yok → **WSL2 + Ubuntu** opsiyonu veya Python görselleştirici |
+
+### 8.6 Windows Deployment Kararı (iki yol)
+
+**Yol 1 — Python Görselleştirici (ÖNERİLEN, garantili)**
+- Windows native, kurulum ~10 dk: `python -m venv` + `pip install pygame numpy opencv-python moderngl`
+- CNN: int8 model Python'a taşınır (numpy ile — aynı ağırlıklar, aynı doğruluk; doğrulama sunucuda compare ile yapılır)
+- 3D render: moderngl + RTX 4050 → akıcı sahne
+- 4 panelli süreç gösterimi: pygame/OpenCV overlay
+- **Risk: yok — her Windows'ta çalışır**
+
+**Yol 2 — WSL2 + Gazebo (hedef, ileri faz)**
+- WSL2 + Ubuntu → Gazebo (gz-sim) + ArduPilot SITL native Linux ortamı
+- WSLg ile GUI (Gazebo penceresi Windows'ta görünür)
+- RTX 4050 WSL2'de CUDA destekli (render hızlanır)
+- **Risk:** kurulum 1-2 saat, WSLg render performansı değişken, standda sürpriz çıkabilir
+- **Öneri:** Geliştirme/doğrulama ortamı olarak sunucuda; laptopta opsiyonel ikinci faz
+
+**Sunum stratejisi:** Çekirdek her iki yolda aynı (CNN + tespit + takip + süreç paneli). Yol 1 garantili gösterim; Yol 2 zaman kalırsa eklenecek gerçek Gazebo dünyası.
 
 ---
 
