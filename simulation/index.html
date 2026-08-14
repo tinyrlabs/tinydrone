@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TINYDRONE — SITL Telemetri</title>
+<style>
+  :root { --bg:#0a0a0a; --card:#111; --acc:#8b5cf6; --ok:#22c55e; --warn:#f59e0b; --txt:#e5e5e5; --dim:#888; }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:var(--bg); color:var(--txt); font-family:'JetBrains Mono','Consolas',monospace; padding:20px; }
+  h1 { font-size:18px; letter-spacing:2px; color:var(--acc); margin-bottom:4px; }
+  .sub { color:var(--dim); font-size:11px; margin-bottom:20px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
+  .card { background:var(--card); border:1px solid #222; border-radius:8px; padding:14px; }
+  .card .label { font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; }
+  .card .val { font-size:26px; margin-top:6px; font-weight:bold; }
+  .card .val small { font-size:13px; color:var(--dim); font-weight:normal; }
+  .ok { color:var(--ok); } .warn { color:var(--warn); } .dim { color:var(--dim); }
+  #conn { display:inline-block; width:10px; height:10px; border-radius:50%; background:#333; margin-right:6px; }
+  #conn.on { background:var(--ok); } #conn.off { background:var(--warn); }
+  .status-line { margin-top:20px; font-size:12px; color:var(--dim); }
+  .status-line span { color:var(--txt); }
+  .arm-yes { color:var(--ok); } .arm-no { color:var(--warn); }
+</style>
+</head>
+<body>
+  <h1>▚ TINYDRONE — SITL CANLI TELEMETRİ</h1>
+  <div class="sub">ArduPilot SITL · ArduCopter · Kocaeli · <span id="conn" class="off"></span><span id="conn_txt">bağlanıyor...</span></div>
+
+  <div class="grid">
+    <div class="card"><div class="label">Uçuş Modu</div><div class="val" id="mode">-</div></div>
+    <div class="card"><div class="label">Motor Durumu</div><div class="val" id="armed" class="arm-no">OFF</div></div>
+    <div class="card"><div class="label">Yükseklik</div><div class="val" id="alt">0.0 <small>m</small></div></div>
+    <div class="card"><div class="label">Yaw (Baş)</div><div class="val" id="yaw">0°</div></div>
+    <div class="card"><div class="label">Hız</div><div class="val" id="speed">0.0 <small>m/s</small></div></div>
+    <div class="card"><div class="label">Roll / Pitch</div><div class="val" id="att">0° / 0°</div></div>
+    <div class="card"><div class="label">GPS Fix</div><div class="val" id="gps">YOK</div></div>
+    <div class="card"><div class="label">Uydu</div><div class="val" id="sats">0</div></div>
+    <div class="card"><div class="label">Batarya</div><div class="val" id="volt">0.0 <small>V</small></div></div>
+    <div class="card"><div class="label">Konum</div><div class="val" id="pos" style="font-size:15px">-</div></div>
+  </div>
+
+  <div class="status-line">
+    Uçuş süresi: <span id="time">0.0</span> s &nbsp;·&nbsp;
+    Güncelleme: <span id="tick">-</span> &nbsp;·&nbsp;
+    <span style="color:var(--acc)">sim.sametyilmaztemel.com — TINYDRONE simülasyonu</span>
+  </div>
+
+<script>
+const $ = id => document.getElementById(id);
+const es = new EventSource('/events');
+es.onmessage = e => {
+  const s = JSON.parse(e.data);
+  $('conn').className = s.connected ? 'on' : 'off';
+  $('conn_txt').textContent = s.connected ? 'bağlı' : 'bağlantı yok';
+  $('mode').textContent = s.mode;
+  const arm = $('armed');
+  arm.textContent = s.armed ? 'ARMED' : 'OFF';
+  arm.className = 'val ' + (s.armed ? 'arm-yes' : 'arm-no');
+  $('alt').innerHTML = s.alt.toFixed(1) + ' <small>m</small>';
+  $('yaw').textContent = Math.round(s.yaw) + '°';
+  $('speed').innerHTML = s.speed.toFixed(1) + ' <small>m/s</small>';
+  $('att').textContent = s.roll.toFixed(0) + '° / ' + s.pitch.toFixed(0) + '°';
+  $('gps').textContent = s.gps_fix >= 3 ? '3D FIX' : (s.gps_fix > 0 ? 'FIX ' + s.gps_fix : 'YOK');
+  $('gps').className = 'val ' + (s.gps_fix >= 3 ? 'ok' : 'warn');
+  $('sats').textContent = s.sats;
+  $('volt').innerHTML = s.volt.toFixed(1) + ' <small>V</small>';
+  $('pos').textContent = s.lat.toFixed(5) + ', ' + s.lon.toFixed(5);
+  $('time').textContent = s.time.toFixed(1);
+  $('tick').textContent = new Date().toLocaleTimeString('tr-TR');
+};
+es.onerror = () => { $('conn').className = 'off'; $('conn_txt').textContent = 'bağlantı kopuk'; };
+</script>
+</body>
+</html>
