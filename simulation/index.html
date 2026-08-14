@@ -48,28 +48,37 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const es = new EventSource('/events');
-es.onmessage = e => {
-  const s = JSON.parse(e.data);
-  $('conn').className = s.connected ? 'on' : 'off';
-  $('conn_txt').textContent = s.connected ? 'bağlı' : 'bağlantı yok';
-  $('mode').textContent = s.mode;
-  const arm = $('armed');
-  arm.textContent = s.armed ? 'ARMED' : 'OFF';
-  arm.className = 'val ' + (s.armed ? 'arm-yes' : 'arm-no');
-  $('alt').innerHTML = s.alt.toFixed(1) + ' <small>m</small>';
-  $('yaw').textContent = Math.round(s.yaw) + '°';
-  $('speed').innerHTML = s.speed.toFixed(1) + ' <small>m/s</small>';
-  $('att').textContent = s.roll.toFixed(0) + '° / ' + s.pitch.toFixed(0) + '°';
-  $('gps').textContent = s.gps_fix >= 3 ? '3D FIX' : (s.gps_fix > 0 ? 'FIX ' + s.gps_fix : 'YOK');
-  $('gps').className = 'val ' + (s.gps_fix >= 3 ? 'ok' : 'warn');
-  $('sats').textContent = s.sats;
-  $('volt').innerHTML = s.volt.toFixed(1) + ' <small>V</small>';
-  $('pos').textContent = s.lat.toFixed(5) + ', ' + s.lon.toFixed(5);
-  $('time').textContent = s.time.toFixed(1);
-  $('tick').textContent = new Date().toLocaleTimeString('tr-TR');
-};
-es.onerror = () => { $('conn').className = 'off'; $('conn_txt').textContent = 'bağlantı kopuk'; };
+
+// SSE yerine polling — Cloudflare proxy'leri SSE'yi buffer'lar (stream gelmez),
+// polling her ortamda garantili çalışır.
+async function tick() {
+  try {
+    const r = await fetch('/status');
+    const s = await r.json();
+    $('conn').className = s.connected ? 'on' : 'off';
+    $('conn_txt').textContent = s.connected ? 'bağlı' : 'bağlantı yok';
+    $('mode').textContent = s.mode;
+    const arm = $('armed');
+    arm.textContent = s.armed ? 'ARMED' : 'OFF';
+    arm.className = 'val ' + (s.armed ? 'arm-yes' : 'arm-no');
+    $('alt').innerHTML = s.alt.toFixed(1) + ' <small>m</small>';
+    $('yaw').textContent = Math.round(s.yaw) + '°';
+    $('speed').innerHTML = s.speed.toFixed(1) + ' <small>m/s</small>';
+    $('att').textContent = s.roll.toFixed(0) + '° / ' + s.pitch.toFixed(0) + '°';
+    $('gps').textContent = s.gps_fix >= 3 ? '3D FIX' : (s.gps_fix > 0 ? 'FIX ' + s.gps_fix : 'YOK');
+    $('gps').className = 'val ' + (s.gps_fix >= 3 ? 'ok' : 'warn');
+    $('sats').textContent = s.sats;
+    $('volt').innerHTML = s.volt.toFixed(1) + ' <small>V</small>';
+    $('pos').textContent = s.lat.toFixed(5) + ', ' + s.lon.toFixed(5);
+    $('time').textContent = s.time.toFixed(1);
+    $('tick').textContent = new Date().toLocaleTimeString('tr-TR');
+  } catch (e) {
+    $('conn').className = 'off';
+    $('conn_txt').textContent = 'bağlantı kopuk';
+  }
+}
+tick();
+setInterval(tick, 500);
 </script>
 </body>
 </html>
