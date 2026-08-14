@@ -88,5 +88,28 @@ test: $(TEST_BINS)
 $(BUILD_DIR)/test_%: $(TEST_DIR)/%.c $(SIM_DIR)/detector.c | $(BUILD_DIR)
 	$(CC) $(CFLAGS) -I$(SIM_DIR) $< $(SIM_DIR)/detector.c -o $@ $(LDFLAGS)
 
+# Firmware host testleri (takip modu + int8 doğrulama)
+FW_DIR      = firmware
+FW_INC      = -I$(FW_DIR) -I$(FW_DIR)/main -I$(FW_DIR)/components/tinycml/include
+FW_CML_SRCS = $(FW_DIR)/components/tinycml/src/matrix.c \
+              $(FW_DIR)/components/tinycml/src/conv2d.c \
+              $(FW_DIR)/components/tinycml/src/pool2d.c \
+              $(FW_DIR)/components/tinycml/src/cml_error.c
+
+test-host: $(BUILD_DIR)/test_track $(BUILD_DIR)/compare_i8
+	@ln -sfn ../$(TRAIN_DIR)/dataset $(FW_DIR)/dataset
+	@cd $(FW_DIR) && ../$(BUILD_DIR)/test_track
+	@cd $(TRAIN_DIR) && ../$(BUILD_DIR)/compare_i8
+	@rm -f $(FW_DIR)/dataset
+	@echo "  HOST TESTS OK"
+
+$(BUILD_DIR)/test_track: $(FW_DIR)/test_track.c $(FW_DIR)/main/sliding_window.c \
+                         $(FW_DIR)/main/inference_int8.c $(FW_CML_SRCS) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) $(FW_INC) -I$(TRAIN_DIR) $^ -o $@ $(LDFLAGS)
+
+$(BUILD_DIR)/compare_i8: $(TRAIN_DIR)/compare_i8.c $(TRAIN_DIR)/float_inference.c \
+                         $(TRAIN_DIR)/inference_int8.c $(TINYCML_LIB) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -I$(TINYCML_INC) -I$(TRAIN_DIR) -I$(MODEL_DIR) $^ -o $@ $(LDFLAGS)
+
 clean:
 	rm -rf $(BUILD_DIR)

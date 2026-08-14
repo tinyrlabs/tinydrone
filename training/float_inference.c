@@ -15,7 +15,7 @@
 #include "matrix.h"
 #include "conv2d.h"
 #include "pool2d.h"
-#include "model.h"  /* tinydrone_model.h — ağırlıklar */
+#include "tinydrone_model.h"  /* tinydrone_model.h — ağırlıklar */
 
 #define IMG_H 32
 #define IMG_W 32

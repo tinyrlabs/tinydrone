@@ -18,3 +18,7 @@ CONFIG_LEDC_CTRL_FUNC_IN_IRAM=n
 
 # main task stack — CNN inference stack kullanır
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
+
+# Task watchdog — donma/kilitlenme koruması
+CONFIG_ESP_TASK_WDT_ENABLED=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10

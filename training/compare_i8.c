@@ -17,8 +17,6 @@
 #include "float_inference.h"      /* float */
 #include "inference_int8.h" /* int8 */
 
-static const char *CLASS_NAMES[] = {"tank", "armored_vehicle", "drone_uav", "background"};
-
 int main(void) {
     inference_init();
     inference_int8_init();

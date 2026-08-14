@@ -18,6 +18,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_task_wdt.h"  /* task watchdog — takılma/kilitlenme koruması */
 
 #include "camera.h"
 #include "inference_int8.h"  /* int8 — ESP32 için 4x hızlı */
@@ -77,6 +78,11 @@ void app_main(void) {
     uart_out_init();
     ESP_LOGI(TAG, "UART çıkışı OK (GPIO4/5, 115200)");
 
+    /* Task watchdog — inference takılırsa veya döngü donarsa sistem resetlenir */
+    esp_task_wdt_add(NULL);
+    esp_task_wdt_reset();
+    ESP_LOGI(TAG, "Watchdog OK");
+
     uint8_t frame[SW_FRAME_W * SW_FRAME_H * 3];
     static uint8_t prev_frame[SW_FRAME_W * SW_FRAME_H * 3];
     uint32_t frame_count = 0;
@@ -88,6 +94,7 @@ void app_main(void) {
     int uart_sent_lost = 0;
 
     while (1) {
+        esp_task_wdt_reset();  /* watchdog besle — döngü canlı */
         int64_t t0 = esp_timer_get_time();
 
         /* 1. Kare al (tam çözünürlük) */
