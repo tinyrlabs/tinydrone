@@ -180,12 +180,12 @@ async function tick() {
     on.forEach(id => $(id).classList.remove('on'));
     $('pv1').textContent = '160x120 @' + (s.fps||0).toFixed(1) + 'fps';
     $('pv2').textContent = 'int8 · ' + (s.infer_ms||0).toFixed(1) + 'ms';
-    const d = s.det || {};
-    $('pv3').textContent = d.detected ? (d.class + ' %' + Math.round(d.conf*100)) : 'yok';
-    $('pv4').textContent = d.locked ? 'KİLİTLİ' : (d.detected ? 'İZLİYOR' : 'TARAMA');
+    const dd = s.det || {};
+    $('pv3').textContent = dd.detected ? (dd.class + ' %' + Math.round(dd.conf*100)) : 'yok';
+    $('pv4').textContent = dd.locked ? 'KİLİTLİ' : (dd.detected ? 'İZLİYOR' : 'TARAMA');
     $('pv5').textContent = s.uart || 'T+000Y+000';
-    if (d.locked) { $('p4').classList.add('on'); $('p5').classList.add('on'); }
-    else if (d.detected) { $('p3').classList.add('on'); }
+    if (dd.locked) { $('p4').classList.add('on'); $('p5').classList.add('on'); }
+    else if (dd.detected) { $('p3').classList.add('on'); }
     else { $('p1').classList.add('on'); }
     $('p2').classList.add('on');
     $('conn').className = s.connected ? 'on' : 'off';

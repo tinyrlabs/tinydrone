@@ -791,7 +791,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(html)))
             self.end_headers()
             self.wfile.write(html)
-        elif self.path == "/status":
+        elif self.path.split("?")[0] == "/status":
             with STATE_LOCK:
                 s = {k: v for k, v in STATE.items() if k != "cam_jpeg"}
                 s["cmd_log"] = list(CMD_LOG)
