@@ -150,10 +150,13 @@ def _make_ground():
 
 GROUND_PLANE = _make_ground()
 
-# Gerçek kamera modeli: hafif aşağı bakan kamera (pitch 45°), dikey FOV 45°
-CAM_PITCH = 45.0
-V_FOV = 45.0
-FOCAL_Y = (R_H / 2) / np.tan(np.radians(V_FOV / 2))  # ~290
+# Gerçek kamera modeli: hafif aşağı bakan kamera (pitch 35° — 10m'de ufuk
+# ~14m; daha dik açıda zemin dar banda sıkışıp ekran gökyüzüyle doluyordu),
+# dikey FOV 50° (zemin + hedefler geniş görüşte)
+CAM_PITCH = 35.0
+V_FOV = 50.0
+FOCAL_Y = (R_H / 2) / np.tan(np.radians(V_FOV / 2))  # ~360
+FOCAL_X = FOCAL_Y  # kare piksel (4:3 sensör — yatay odak dikeyle aynı)
 
 
 def persp_coeffs(w, h, top_inset):
@@ -496,19 +499,31 @@ def render_camera(dx, dy, yaw, alt=10.0):
     img = Image.fromarray(np.repeat(sky, R_W, axis=1))
     draw = ImageDraw.Draw(img, "RGBA")
 
-    # Zemin düzlemi (80x80m) + grid
-    g = 40
-    ground_poly = [(_project((x, y, 0), cam, yaw_r, pitch_r))
-                   for x, y in [(-g, -g), (g, -g), (g, g), (-g, g)]]
-    if all(p is not None for p in ground_poly):
-        draw.polygon([(p[0], p[1]) for p in ground_poly], fill=GROUND_C)
-        # Grid çizgileri (10m aralık)
-        for i in range(-g, g + 1, 10):
-            for (a, b) in [((i, -g), (i, g)), ((-g, i), (g, i))]:
-                pa = _project((a[0], a[1], 0), cam, yaw_r, pitch_r)
-                pb = _project((b[0], b[1], 0), cam, yaw_r, pitch_r)
-                if pa and pb:
-                    draw.line([pa[:2], pb[:2]], fill=GRID_C, width=1)
+    # Zemin: kamera önünde sonsuz dörtgen (her yaw'da önde — sabit 80x80m
+    # dörtgenin arka köşeleri kameranın arkasında kalıp tüm zemini düşürüyordu)
+    g = 60
+    fwd_x, fwd_y = math.cos(yaw_r), math.sin(yaw_r)
+    sdx, sdy = -fwd_y, fwd_x  # yan yön
+    zcorners = [
+        (dx + sdx * g, dy + sdy * g),
+        (dx - sdx * g, dy - sdy * g),
+        (dx - sdx * g + fwd_x * g * 2, dy - sdy * g + fwd_y * g * 2),
+        (dx + sdx * g + fwd_x * g * 2, dy + sdy * g + fwd_y * g * 2),
+    ]
+    zproj = [_project((cx, cy, 0), cam, yaw_r, pitch_r) for cx, cy in zcorners]
+    if all(p is not None for p in zproj):
+        draw.polygon([(p[0], p[1]) for p in zproj], fill=GROUND_C)
+        # Grid çizgileri (kamera merkezli 10m — ön dörtgen içinde)
+        for i in range(-3, 4):
+            p1 = _project((dx + sdx * i * 10 + fwd_x * 1, dy + sdy * i * 10 + fwd_y * 1, 0), cam, yaw_r, pitch_r)
+            p2 = _project((dx + sdx * i * 10 + fwd_x * 100, dy + sdy * i * 10 + fwd_y * 100, 0), cam, yaw_r, pitch_r)
+            if p1 and p2:
+                draw.line([p1[:2], p2[:2]], fill=GRID_C, width=1)
+        for i in range(1, 11):
+            p1 = _project((dx + sdx * g + fwd_x * i * 10, dy + sdy * g + fwd_y * i * 10, 0), cam, yaw_r, pitch_r)
+            p2 = _project((dx - sdx * g + fwd_x * i * 10, dy - sdy * g + fwd_y * i * 10, 0), cam, yaw_r, pitch_r)
+            if p1 and p2:
+                draw.line([p1[:2], p2[:2]], fill=GRID_C, width=1)
 
         # Devriye yolları (hareketli hedeflerin patikaları — koyu şerit)
         for t in TARGETS:
