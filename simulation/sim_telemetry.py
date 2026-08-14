@@ -40,13 +40,14 @@ DATA = os.path.join(HERE, "..", "training", "dataset", "processed", "test")
 # ---------- Sanal dünya (NED metre, home merkezli — Gazebo world ile aynı) ---
 FOV_DEG = 60.0
 FOCAL = (FRAME_W / 2) / np.tan(np.radians(FOV_DEG / 2))  # ~138.6
+FOCAL = FOCAL * 1.8  # demo: hedefler kamerada daha büyük görünsün (32px+ tespit için)
 
 TARGETS = [
-    {"id": "tank",       "x": 8.0,  "y": 6.0,  "size": 3.0,
+    {"id": "tank",       "x": 6.0,  "y": 4.0,  "size": 3.0,
      "cls": 0, "dir": "tank"},
-    {"id": "hangar",     "x": -12.0, "y": 5.0, "size": 12.0,
+    {"id": "hangar",     "x": -8.0, "y": 3.0, "size": 12.0,
      "cls": 4, "dir": "military_building"},
-    {"id": "armored",    "x": 4.0,  "y": -8.0, "size": 2.2,
+    {"id": "armored",    "x": 3.0,  "y": -4.0, "size": 2.2,
      "cls": 1, "dir": "armored_vehicle"},
 ]
 
@@ -72,10 +73,14 @@ def _load_bg_tiles():
         files = sorted(f for f in os.listdir(d) if f.endswith(".png"))
         for f in files[:24]:
             img = Image.open(os.path.join(d, f)).convert("RGB")
-            tiles.append(img.resize((40, 40), Image.BILINEAR))
+            # 80x80 tile — daha az mozaik, daha düzgün görüntü
+            tiles.append(img.resize((80, 80), Image.BILINEAR))
     return tiles
 
 BG_TILES = _load_bg_tiles()
+
+# Render yüksek çözünürlükte yapılıp küçültülür (yumuşak görüntü — mozaik yok)
+R_W, R_H = 320, 240
 
 # ---------- Canlı durum (thread'ler arası paylaşım) ----------
 STATE = {
@@ -166,7 +171,7 @@ def do_land():
 
 
 def do_yaw_to(heading):
-    """CONDITION_YAW — drone'u hedefe döndür (GUIDED mod gerekir)."""
+    """CONDITION_YAW — en kısa yoldan hedefe dön (relative + yön seçimi)."""
     with MAV_LOCK:
         if MAV is None:
             return -1
@@ -175,8 +180,13 @@ def do_yaw_to(heading):
         except Exception:
             pass
     time.sleep(1)
+    with STATE_LOCK:
+        cur = STATE["drone_yaw"]
+    # En kısa dönüş: delta -180..180, yön CW(1)/CCW(-1)
+    delta = (heading - cur + 540) % 360 - 180
+    direction = 1 if delta >= 0 else -1
     return send_cmd(mavutil.mavlink.MAV_CMD_CONDITION_YAW,
-                    float(heading), 25.0, 1, 0, 0, 0, 0)
+                    abs(delta), 25.0, direction, 1, 0, 0, 0)
 
 
 def yaw_to_target(tid):
@@ -200,52 +210,46 @@ def start_sitl():
 
 def render_camera(dx, dy, yaw, alt=10.0):
     """Drone (dx,dy) NED + yaw (derece) + alt (m) → 160x120 kamera görüntüsü.
-    Zemin drone hareketiyle kayar (gerçekçi canlı görüntü), hedef boyutu
-    3D mesafeye (yükseklik dahil) göre ölçeklenir."""
+    320x240'ta render edilip küçültülür (yumuşak, düzgün görüntü).
+    Zemin drone hareketiyle kayar, hedef boyutu 3D mesafeye göre ölçeklenir."""
+    scale = R_W / FRAME_W  # 2.0
     if BG_TILES:
-        img = Image.new("RGB", (FRAME_W, FRAME_H))
-        # Zemin offset — drone konumuna bağlı (yaw ile döndürülmüş kayma)
+        img = Image.new("RGB", (R_W, R_H))
         rad = np.radians(yaw)
-        # Kamera yaw yönünde bakarken zemin ters yönde kayar
-        off_x = int((-dx * np.cos(rad) - dy * np.sin(rad)) * 2) % 40
-        off_y = int((dx * np.sin(rad) - dy * np.cos(rad)) * 2) % 40
+        off_x = int((-dx * np.cos(rad) - dy * np.sin(rad)) * 4) % 80
+        off_y = int((dx * np.sin(rad) - dy * np.cos(rad)) * 4) % 80
         seed = int(time.time() * 3)
-        for ty in range(-40, FRAME_H, 40):
-            for tx in range(-40, FRAME_W, 40):
-                tile = BG_TILES[(seed + (ty + off_y) // 40 + (tx + off_x) // 40) % len(BG_TILES)]
+        for ty in range(-80, R_H, 80):
+            for tx in range(-80, R_W, 80):
+                tile = BG_TILES[(seed + (ty + off_y) // 80 + (tx + off_x) // 80) % len(BG_TILES)]
                 img.paste(tile, (tx + off_x, ty + off_y))
     else:
-        frame = np.full((FRAME_H, FRAME_W, 3), 96, dtype=np.uint8)
-        for y in range(FRAME_H):
-            v = int(70 + 40 * (y / FRAME_H))
-            frame[y, :] = (v - 10, v, v - 25)
+        frame = np.full((R_H, R_W, 3), 96, dtype=np.uint8)
         img = Image.fromarray(frame)
 
     for t in TARGETS:
-        # Hedefe vektör (drone'dan) — 3D mesafe (yükseklik dahil)
         vx, vy = t["x"] - dx, t["y"] - dy
         r3d = np.hypot(np.hypot(vx, vy), alt)
         if r3d < 1.0:
             continue
-        theta = np.degrees(np.arctan2(vy, vx))  # kuzeyden (NED x=kuzey)
-        delta = (theta - yaw + 180) % 360 - 180   # -180..180
+        theta = np.degrees(np.arctan2(vy, vx))
+        delta = (theta - yaw + 180) % 360 - 180
         if abs(delta) > FOV_DEG / 2:
-            continue  # görüş dışı
-        # Ekran konumu ve boyutu (3D mesafeye göre — irtifa artınca küçülür)
-        sx = FRAME_W / 2 + (delta / (FOV_DEG / 2)) * (FRAME_W / 2)
-        size_px = int(t["size"] / r3d * FOCAL)
-        size_px = max(8, min(size_px, FRAME_W))
-        # Görsel seç (döngüsel)
+            continue
+        # Yüksek çözünürlükte çiz (scale ×)
+        sx = R_W / 2 + (delta / (FOV_DEG / 2)) * (R_W / 2)
+        size_px = int(t["size"] / r3d * FOCAL * scale)
+        size_px = max(8, min(size_px, R_W))
         imgs = TARGET_IMGS.get(t["id"])
         if not imgs:
             continue
         tgt = imgs[int(time.time() * 2) % len(imgs)]
         tgt = tgt.resize((size_px, size_px), Image.BILINEAR)
-        # Ekran y: hedef yerde — kamera aşağı bakar, merkez-alt bölge
-        sy = int(FRAME_H * 0.55)
+        sy = int(R_H * 0.55)
         # NOT: mask'sız paste — RGB görsel mask olamaz ("bad transparency mask")
         img.paste(tgt, (int(sx - size_px / 2), sy))
-    return np.asarray(img)
+    # Yumuşak küçültme → 160x120 (mozaik/captcha görünümü yok)
+    return np.asarray(img.resize((FRAME_W, FRAME_H), Image.BILINEAR))
 
 
 def cnn_loop():
