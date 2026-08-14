@@ -584,6 +584,7 @@ def cnn_loop():
         print(f"[CNN] başlatılamadı: {e}")
         return
     last = time.time()
+    last_jpeg = 0.0
     while True:
         try:
             with STATE_LOCK:
@@ -655,7 +656,10 @@ def cnn_loop():
                 STATE["fps"] = 1.0 / max(time.time() - last, 1e-6)
                 STATE["infer_ms"] = round(infer_ms, 2)
                 STATE["uart"] = uart
-                STATE["cam_jpeg"] = _frame_to_jpeg(frame720, det, RENDER_SCALE)
+                # JPEG 10 FPS üret (panel 2.5 FPS çeker — 60 FPS encode CPU yakar)
+                if time.time() - last_jpeg > 0.1:
+                    STATE["cam_jpeg"] = _frame_to_jpeg(frame720, det, RENDER_SCALE)
+                    last_jpeg = time.time()
             last = time.time()
         except Exception as e:
             print(f"[CNN] hata: {e}")
