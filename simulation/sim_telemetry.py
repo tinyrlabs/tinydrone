@@ -1,38 +1,89 @@
 #!/usr/bin/env python3
 """
-sim_telemetry.py — SITL canlı telemetri web paneli.
+sim_telemetry.py — SITL canlı telemetri + sanal dünya + CNN tespit web paneli.
 
-ArduPilot SITL başlatır, MAVLink telemetriyi okur, tarayıcıya SSE ile iter.
-- GET /        → index.html (canlı panel)
-- GET /events  → SSE (telemetri akışı, 5 Hz)
-- GET /status  → JSON (son durum)
+ArduPilot SITL başlatır, MAVLink telemetriyi okur, drone'un sanal dünyadaki
+konumuna göre kamera görüntüsü üretir (gerçek dataset görselleri), int8 CNN ile
+tespit yapar ve tarayıcıya sunar.
+
+Endpoints:
+- GET /        → index.html (canlı panel: kartlar + kamera + sahne)
+- GET /status  → JSON (telemetri + sahne + tespit)
+- GET /cam     → JPEG (tespit çizilmiş kamera görüntüsü)
 
 Kullanım: python3 sim_telemetry.py [--port 8090] [--no-sitl]
 """
 import argparse
+import base64
+import io
 import json
+import os
 import subprocess
 import sys
 import threading
 import time
-import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import numpy as np
+from PIL import Image, ImageDraw
 from pymavlink import mavutil
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from tinydrone_bridge import TinyDrone, FRAME_W, FRAME_H
 
 BIN = "/home/ubuntu/ardupilot/build/sitl/bin/arducopter"
 DEFAULTS = "/home/ubuntu/ardupilot/Tools/autotest/default_params/copter.parm"
 MAV_TCP = "tcp:127.0.0.1:5760"
-HERE = os.path.dirname(os.path.abspath(__file__))
+DATA = os.path.join(HERE, "..", "training", "dataset", "processed", "test")
 
-# Canlı durum (thread'ler arası paylaşım)
+# ---------- Sanal dünya (NED metre, home merkezli — Gazebo world ile aynı) ---
+FOV_DEG = 60.0
+FOCAL = (FRAME_W / 2) / np.tan(np.radians(FOV_DEG / 2))  # ~138.6
+
+TARGETS = [
+    {"id": "tank",       "x": 8.0,  "y": 6.0,  "size": 3.0,
+     "cls": 0, "dir": "tank"},
+    {"id": "hangar",     "x": -12.0, "y": 5.0, "size": 12.0,
+     "cls": 4, "dir": "military_building"},
+    {"id": "armored",    "x": 4.0,  "y": -8.0, "size": 2.2,
+     "cls": 1, "dir": "armored_vehicle"},
+]
+
+# Hedef görsellerini yükle (gerçek dataset görselleri)
+def _load_target_imgs():
+    imgs = {}
+    for t in TARGETS:
+        d = os.path.join(DATA, t["dir"])
+        if not os.path.isdir(d):
+            continue
+        files = sorted(f for f in os.listdir(d) if f.endswith(".png"))[:6]
+        imgs[t["id"]] = [Image.open(os.path.join(d, f)).convert("RGB")
+                         for f in files]
+    return imgs
+
+TARGET_IMGS = _load_target_imgs()
+
+# ---------- Canlı durum (thread'ler arası paylaşım) ----------
 STATE = {
     "connected": False, "armed": False, "mode": "-",
     "alt": 0.0, "yaw": 0.0, "speed": 0.0,
     "gps_fix": 0, "sats": 0, "volt": 0.0,
     "roll": 0.0, "pitch": 0.0, "time": 0.0,
     "lat": 0.0, "lon": 0.0,
+    # Sanal dünya
+    "drone_x": 0.0, "drone_y": 0.0, "drone_yaw": 0.0, "drone_alt": 0.0,
+    "targets": [{"id": t["id"], "x": t["x"], "y": t["y"], "cls": t["cls"]}
+                for t in TARGETS],
+    # CNN tespit
+    "det": {"detected": False, "cls": -1, "class": "-", "conf": 0.0,
+            "x": -1, "y": -1, "locked": False},
+    "fps": 0.0,
 }
 STATE_LOCK = threading.Lock()
+
+# ---------- CNN ----------
+td = None
 
 
 def start_sitl():
@@ -41,6 +92,83 @@ def start_sitl():
          "--defaults", DEFAULTS],
         stdout=open("/tmp/ardu.log", "w"), stderr=subprocess.STDOUT)
     return proc
+
+
+def render_camera(dx, dy, yaw):
+    """Drone (dx,dy) NED + yaw (derece) → 160x120 kamera görüntüsü (numpy RGB).
+    Hedefler görüş açısındaysa gerçek dataset görseliyle çizilir."""
+    frame = np.full((FRAME_H, FRAME_W, 3), 96, dtype=np.uint8)
+    # Zemin degrade (koyu yeşil-kahve)
+    for y in range(FRAME_H):
+        v = int(70 + 40 * (y / FRAME_H))
+        frame[y, :] = (v - 10, v, v - 25)
+    img = Image.fromarray(frame)
+
+    for t in TARGETS:
+        # Hedefe vektör (drone'dan)
+        vx, vy = t["x"] - dx, t["y"] - dy
+        r = np.hypot(vx, vy)
+        if r < 0.5:
+            continue
+        theta = np.degrees(np.arctan2(vy, vx))  # kuzeyden (NED x=kuzey)
+        delta = (theta - yaw + 180) % 360 - 180   # -180..180
+        if abs(delta) > FOV_DEG / 2:
+            continue  # görüş dışı
+        # Ekran konumu ve boyutu (mesafeye göre)
+        sx = FRAME_W / 2 + (delta / (FOV_DEG / 2)) * (FRAME_W / 2)
+        size_px = int(t["size"] / r * FOCAL)
+        size_px = max(8, min(size_px, FRAME_W))
+        # Görsel seç (döngüsel)
+        imgs = TARGET_IMGS.get(t["id"])
+        if not imgs:
+            continue
+        tgt = imgs[int(time.time() * 2) % len(imgs)]
+        tgt = tgt.resize((size_px, size_px), Image.BILINEAR)
+        # Ekran y: hedef yerde — kamera aşağı bakar, merkez-alt bölge
+        sy = int(FRAME_H * 0.55)
+        img.paste(tgt, (int(sx - size_px / 2), sy), tgt)
+    return np.asarray(img)
+
+
+def cnn_loop():
+    """Her 300ms: kamera render → CNN tespit → STATE güncelle."""
+    global td
+    try:
+        td = TinyDrone()
+    except Exception as e:
+        print(f"[CNN] başlatılamadı: {e}")
+        return
+    last = time.time()
+    while True:
+        try:
+            with STATE_LOCK:
+                dx, dy = STATE["drone_x"], STATE["drone_y"]
+                yaw = STATE["drone_yaw"]
+            frame = render_camera(dx, dy, yaw)
+            det = td.detect_track(frame)
+            with STATE_LOCK:
+                STATE["det"] = det
+                STATE["fps"] = 1.0 / max(time.time() - last, 1e-6)
+                STATE["cam_jpeg"] = _frame_to_jpeg(frame, det)
+            last = time.time()
+        except Exception as e:
+            print(f"[CNN] hata: {e}")
+        time.sleep(0.3)
+
+
+def _frame_to_jpeg(frame, det):
+    """Frame'e bbox çiz, JPEG'e çevir (base64)."""
+    img = Image.fromarray(frame)
+    d = ImageDraw.Draw(img)
+    if det["detected"]:
+        x, y = det["x"], det["y"]
+        d.rectangle([x, y, x + 32, y + 32], outline=(139, 92, 246), width=2)
+        d.text((x, max(0, y - 10)),
+               f"{det['class']} %{det['conf']*100:.0f}",
+               fill=(139, 92, 246))
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=70)
+    return base64.b64encode(buf.getvalue()).decode()
 
 
 def mavlink_loop():
@@ -55,7 +183,6 @@ def mavlink_loop():
                     mav = None
                     time.sleep(2)
                     continue
-                # Stream iste
                 for mid in (24, 30, 32, 74, 193):
                     mav.mav.command_long_send(
                         mav.target_system, mav.target_component,
@@ -87,7 +214,10 @@ def mavlink_loop():
                     STATE["pitch"] = msg.pitch * 57.2958
                 elif t == "LOCAL_POSITION_NED":
                     STATE["time"] = msg.time_boot_ms / 1000.0
-        except Exception as e:
+                    STATE["drone_x"] = msg.x   # kuzey (m)
+                    STATE["drone_y"] = msg.y   # doğu (m)
+                    STATE["drone_alt"] = -msg.z
+        except Exception:
             with STATE_LOCK:
                 STATE["connected"] = False
             mav = None
@@ -99,7 +229,7 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self):
-        if self.path == "/" or self.path == "/index.html":
+        if self.path in ("/", "/index.html"):
             html = open(os.path.join(HERE, "index.html"), "rb").read()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -108,27 +238,24 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(html)
         elif self.path == "/status":
             with STATE_LOCK:
-                body = json.dumps(STATE).encode()
+                s = {k: v for k, v in STATE.items() if k != "cam_jpeg"}
+            body = json.dumps(s).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-        elif self.path == "/events":
+        elif self.path.startswith("/cam"):
+            with STATE_LOCK:
+                b64 = STATE.get("cam_jpeg", "")
+            raw = base64.b64decode(b64) if b64 else b""
             self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("Connection", "keep-alive")
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
-            try:
-                while True:
-                    with STATE_LOCK:
-                        body = json.dumps(STATE)
-                    self.wfile.write(f"data: {body}\n\n".encode())
-                    self.wfile.flush()
-                    time.sleep(0.2)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
+            self.wfile.write(raw)
         else:
             self.send_response(404)
             self.end_headers()
@@ -137,17 +264,17 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8090)
-    ap.add_argument("--no-sitl", action="store_true", help="mevcut SITL'e bağlan")
+    ap.add_argument("--no-sitl", action="store_true")
     args = ap.parse_args()
 
     if not args.no_sitl:
         print("[SITL] başlatılıyor...")
         start_sitl()
 
-    t = threading.Thread(target=mavlink_loop, daemon=True)
-    t.start()
+    threading.Thread(target=mavlink_loop, daemon=True).start()
+    threading.Thread(target=cnn_loop, daemon=True).start()
 
-    print(f"[WEB] http://0.0.0.0:{args.port} — panel hazır")
+    print(f"[WEB] http://0.0.0.0:{args.port}")
     srv = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
     srv.serve_forever()
 

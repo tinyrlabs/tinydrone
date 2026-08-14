@@ -3,54 +3,116 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TINYDRONE — SITL Telemetri</title>
+<title>TINYDRONE — SITL Simülasyon</title>
 <style>
   :root { --bg:#0a0a0a; --card:#111; --acc:#8b5cf6; --ok:#22c55e; --warn:#f59e0b; --txt:#e5e5e5; --dim:#888; }
   * { margin:0; padding:0; box-sizing:border-box; }
-  body { background:var(--bg); color:var(--txt); font-family:'JetBrains Mono','Consolas',monospace; padding:20px; }
-  h1 { font-size:18px; letter-spacing:2px; color:var(--acc); margin-bottom:4px; }
-  .sub { color:var(--dim); font-size:11px; margin-bottom:20px; }
-  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
-  .card { background:var(--card); border:1px solid #222; border-radius:8px; padding:14px; }
+  body { background:var(--bg); color:var(--txt); font-family:'JetBrains Mono','Consolas',monospace; padding:16px; }
+  h1 { font-size:17px; letter-spacing:2px; color:var(--acc); margin-bottom:4px; }
+  .sub { color:var(--dim); font-size:11px; margin-bottom:14px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; margin-bottom:14px; }
+  .card { background:var(--card); border:1px solid #222; border-radius:8px; padding:12px; }
   .card .label { font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; }
-  .card .val { font-size:26px; margin-top:6px; font-weight:bold; }
-  .card .val small { font-size:13px; color:var(--dim); font-weight:normal; }
+  .card .val { font-size:22px; margin-top:4px; font-weight:bold; }
+  .card .val small { font-size:12px; color:var(--dim); font-weight:normal; }
   .ok { color:var(--ok); } .warn { color:var(--warn); } .dim { color:var(--dim); }
   #conn { display:inline-block; width:10px; height:10px; border-radius:50%; background:#333; margin-right:6px; }
   #conn.on { background:var(--ok); } #conn.off { background:var(--warn); }
-  .status-line { margin-top:20px; font-size:12px; color:var(--dim); }
-  .status-line span { color:var(--txt); }
   .arm-yes { color:var(--ok); } .arm-no { color:var(--warn); }
+
+  .visuals { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:14px; }
+  .panel { background:var(--card); border:1px solid #222; border-radius:8px; padding:12px; }
+  .panel h2 { font-size:11px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; margin-bottom:8px; }
+  .panel h2 span { color:var(--acc); }
+  #cam { width:100%; border-radius:6px; background:#000; display:block; image-rendering:pixelated; }
+  #scene { width:100%; border-radius:6px; background:#0d140d; display:block; }
+
+  .det-line { margin-top:10px; font-size:12px; }
+  .det-line .tag { display:inline-block; background:var(--acc); color:#fff; padding:2px 8px; border-radius:4px; margin-right:6px; font-size:11px; }
+  .status-line { font-size:12px; color:var(--dim); }
+  .status-line span { color:var(--txt); }
+
+  @media (max-width: 900px) { .visuals { grid-template-columns:1fr; } }
 </style>
 </head>
 <body>
-  <h1>▚ TINYDRONE — SITL CANLI TELEMETRİ</h1>
-  <div class="sub">ArduPilot SITL · ArduCopter · Kocaeli · <span id="conn" class="off"></span><span id="conn_txt">bağlanıyor...</span></div>
+  <h1>▚ TINYDRONE — SITL SİMÜLASYON</h1>
+  <div class="sub">ArduPilot SITL · ArduCopter · Kocaeli · <span id="conn" class="off"></span><span id="conn_txt">bağlanıyor...</span> · <span id="fps">0</span> FPS (CNN)</div>
 
   <div class="grid">
     <div class="card"><div class="label">Uçuş Modu</div><div class="val" id="mode">-</div></div>
-    <div class="card"><div class="label">Motor Durumu</div><div class="val" id="armed" class="arm-no">OFF</div></div>
+    <div class="card"><div class="label">Motor</div><div class="val" id="armed" class="arm-no">OFF</div></div>
     <div class="card"><div class="label">Yükseklik</div><div class="val" id="alt">0.0 <small>m</small></div></div>
-    <div class="card"><div class="label">Yaw (Baş)</div><div class="val" id="yaw">0°</div></div>
+    <div class="card"><div class="label">Yaw</div><div class="val" id="yaw">0°</div></div>
     <div class="card"><div class="label">Hız</div><div class="val" id="speed">0.0 <small>m/s</small></div></div>
-    <div class="card"><div class="label">Roll / Pitch</div><div class="val" id="att">0° / 0°</div></div>
-    <div class="card"><div class="label">GPS Fix</div><div class="val" id="gps">YOK</div></div>
+    <div class="card"><div class="label">GPS</div><div class="val" id="gps">YOK</div></div>
     <div class="card"><div class="label">Uydu</div><div class="val" id="sats">0</div></div>
     <div class="card"><div class="label">Batarya</div><div class="val" id="volt">0.0 <small>V</small></div></div>
-    <div class="card"><div class="label">Konum</div><div class="val" id="pos" style="font-size:15px">-</div></div>
+  </div>
+
+  <div class="visuals">
+    <div class="panel">
+      <h2>Drone Kamerası + CNN <span>(canlı)</span></h2>
+      <img id="cam" src="/cam" alt="kamera">
+      <div class="det-line" id="detline">Tespit bekleniyor...</div>
+    </div>
+    <div class="panel">
+      <h2>Sanal Sahne <span>(üstten görünüm)</span></h2>
+      <canvas id="scene" width="640" height="400"></canvas>
+    </div>
   </div>
 
   <div class="status-line">
-    Uçuş süresi: <span id="time">0.0</span> s &nbsp;·&nbsp;
-    Güncelleme: <span id="tick">-</span> &nbsp;·&nbsp;
-    <span style="color:var(--acc)">sim.sametyilmaztemel.com — TINYDRONE simülasyonu</span>
+    Uçuş: <span id="time">0.0</span> s · Konum: <span id="pos">-</span> · Roll/Pitch: <span id="att">0°/0°</span>
   </div>
 
 <script>
 const $ = id => document.getElementById(id);
+const TYPES = {0:'tank',1:'armored_vehicle',2:'drone_uav',3:'background',4:'military_building'};
 
-// SSE yerine polling — Cloudflare proxy'leri SSE'yi buffer'lar (stream gelmez),
-// polling her ortamda garantili çalışır.
+// Kamera görüntüsü — 2 Hz yenile
+setInterval(() => { $('cam').src = '/cam?t=' + Date.now(); }, 500);
+
+// Sahne canvas
+const cv = $('scene'), ctx = cv.getContext('2d');
+function drawScene(s) {
+  ctx.clearRect(0, 0, 640, 400);
+  // Izgara
+  ctx.strokeStyle = '#1a2a1a'; ctx.lineWidth = 1;
+  for (let i = 0; i <= 640; i += 32) { ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, 400); ctx.stroke(); }
+  for (let i = 0; i <= 400; i += 32) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(640, i); ctx.stroke(); }
+  // Ölçek: 1m = 16px, merkez = drone
+  const scale = 16, ox = 320, oy = 200;
+  // Hedefler
+  (s.targets || []).forEach(t => {
+    const x = ox + t.x * scale, y = oy - t.y * scale;
+    ctx.fillStyle = '#b91c1c';
+    ctx.fillRect(x - 6, y - 6, 12, 12);
+    ctx.font = '10px monospace'; ctx.fillStyle = '#888';
+    ctx.fillText(t.id, x + 10, y + 4);
+  });
+  // Drone (yaw ile üçgen)
+  const dx = ox + s.drone_x * scale, dy = oy - s.drone_y * scale;
+  const yaw = s.drone_yaw * Math.PI / 180;
+  ctx.save();
+  ctx.translate(dx, dy); ctx.rotate(-yaw);
+  ctx.fillStyle = '#8b5cf6';
+  ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(-8, -8); ctx.lineTo(-8, 8); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  ctx.font = '10px monospace'; ctx.fillStyle = '#8b5cf6';
+  ctx.fillText('drone ' + Math.round(s.drone_yaw) + '°', dx + 16, dy - 8);
+  // Tespit oku (drone'dan hedefe)
+  if (s.det && s.det.detected && s.det.conf > 0.5) {
+    const tx = ox + s.drone_x * scale, ty = oy - s.drone_y * scale;
+    ctx.strokeStyle = '#8b5cf6'; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(tx, ty);
+    ctx.lineTo(tx + Math.sin(-s.drone_yaw*Math.PI/180) * 60,
+               ty - Math.cos(-s.drone_yaw*Math.PI/180) * 60);
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+}
+
+// Polling (SSE Cloudflare'da buffer'lanıyor)
 async function tick() {
   try {
     const r = await fetch('/status');
@@ -64,14 +126,25 @@ async function tick() {
     $('alt').innerHTML = s.alt.toFixed(1) + ' <small>m</small>';
     $('yaw').textContent = Math.round(s.yaw) + '°';
     $('speed').innerHTML = s.speed.toFixed(1) + ' <small>m/s</small>';
-    $('att').textContent = s.roll.toFixed(0) + '° / ' + s.pitch.toFixed(0) + '°';
     $('gps').textContent = s.gps_fix >= 3 ? '3D FIX' : (s.gps_fix > 0 ? 'FIX ' + s.gps_fix : 'YOK');
     $('gps').className = 'val ' + (s.gps_fix >= 3 ? 'ok' : 'warn');
     $('sats').textContent = s.sats;
     $('volt').innerHTML = s.volt.toFixed(1) + ' <small>V</small>';
     $('pos').textContent = s.lat.toFixed(5) + ', ' + s.lon.toFixed(5);
+    $('att').textContent = s.roll.toFixed(0) + '° / ' + s.pitch.toFixed(0) + '°';
     $('time').textContent = s.time.toFixed(1);
-    $('tick').textContent = new Date().toLocaleTimeString('tr-TR');
+    $('fps').textContent = (s.fps || 0).toFixed(1);
+    // Tespit satırı
+    const d = s.det || {};
+    const dl = $('detline');
+    if (d.detected && d.conf > 0.4) {
+      dl.innerHTML = '<span class="tag">' + (TYPES[d.cls] || '?') + '</span>güven %' +
+        (d.conf*100).toFixed(1) + ' · ' + (d.locked ? 'KİLİTLİ' : 'kilitli değil') +
+        ' · bbox (' + d.x + ',' + d.y + ')';
+    } else {
+      dl.innerHTML = 'Hedef görüşte değil — drone\'u hedefe doğru çevir';
+    }
+    drawScene(s);
   } catch (e) {
     $('conn').className = 'off';
     $('conn_txt').textContent = 'bağlantı kopuk';
