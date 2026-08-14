@@ -57,3 +57,6 @@ firmware/test_sliding
 firmware/test_track
 simulation/*.so
 simulation/__pycache__/
+simulation/eeprom.bin
+simulation/logs/
+simulation/terrain/
