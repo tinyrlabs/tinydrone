@@ -168,6 +168,7 @@ STATE = {
     "alt": 0.0, "yaw": 0.0, "speed": 0.0,
     "gps_fix": 0, "sats": 0, "volt": 0.0,
     "roll": 0.0, "pitch": 0.0, "att_yaw": 0.0, "time": 0.0,
+    "infer_ms": 0.0, "uart": "T+000Y+000",
     "lat": 0.0, "lon": 0.0,
     # Sanal dünya
     "drone_x": 0.0, "drone_y": 0.0, "drone_yaw": 0.0, "drone_alt": 0.0,
@@ -267,6 +268,18 @@ def do_yaw_to(heading):
     direction = 1 if delta >= 0 else -1
     return send_cmd(mavutil.mavlink.MAV_CMD_CONDITION_YAW,
                     abs(delta), 25.0, direction, 1, 0, 0, 0)
+
+
+def _target_yaw(dx, dy, yaw):
+    """Görüşteki ilk hedefin drone yaw'ına göre offset'i (derece)."""
+    with WORLD_LOCK:
+        for t in TARGETS:
+            pos = TARGET_POS.get(t["id"], (t["x"], t["y"]))
+            theta = math.degrees(math.atan2(pos[1] - dy, pos[0] - dx))
+            delta = (theta - yaw + 180) % 360 - 180
+            if abs(delta) <= FOV_DEG / 2 + 8:
+                return delta
+    return 0.0
 
 
 def yaw_to_target(tid):
@@ -533,6 +546,7 @@ def cnn_loop():
             # Görüşteki hedef: kameradaki görüntü gerçek 3D, sınıflandırma
             # hedefin native görseli üzerinden (model 3D kutu render'ını
             # tanımıyor — eğitim dağılımı dışı). Kilitli takip.
+            t0 = time.time()
             if visible:
                 tid, bx, by, bw, bh = visible[0]
                 imgs = TARGET_IMGS.get(tid)
@@ -544,9 +558,22 @@ def cnn_loop():
                                "class": r["class"], "conf": r["conf"],
                                "x": bx, "y": by,
                                "locked": r["conf"] > 0.6}
+            infer_ms = (time.time() - t0) * 1000.0
+            # UART çıkışı (firmware uart_out.c formatı: T%+03dY%+03d)
+            if det["detected"] and visible:
+                tid, bx, by, bw, bh = visible[0]
+                # T: hedef yaw offset (derece), Y: bbox merkez x sapması (px)
+                tx = det["x"] + bw / 2
+                t_off = int(round(_target_yaw(dx, dy, yaw)))
+                y_off = int(round((tx - FRAME_W / 2) * 0.5))
+                uart = f"T{t_off:+03d}Y{y_off:+03d}"
+            else:
+                uart = "T+000Y+000"
             with STATE_LOCK:
                 STATE["det"] = det
                 STATE["fps"] = 1.0 / max(time.time() - last, 1e-6)
+                STATE["infer_ms"] = round(infer_ms, 2)
+                STATE["uart"] = uart
                 STATE["cam_jpeg"] = _frame_to_jpeg(frame, det)
             last = time.time()
         except Exception as e:

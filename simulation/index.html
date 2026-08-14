@@ -44,6 +44,15 @@
   .cmdlog { font-size:11px; color:var(--dim); margin-top:6px; }
   .cmdlog span { color:var(--acc); }
 
+  /* Süreç akış çubuğu */
+  .pipeline { display:flex; gap:0; margin:14px 0; border:1px solid #222; border-radius:8px; overflow:hidden; }
+  .pipe { flex:1; padding:10px 8px; text-align:center; background:var(--card); border-right:1px solid #222; }
+  .pipe:last-child { border-right:none; }
+  .pipe .name { font-size:10px; color:var(--dim); text-transform:uppercase; letter-spacing:1px; }
+  .pipe .val { font-size:13px; color:var(--txt); margin-top:4px; font-family:monospace; }
+  .pipe.on { background:#1a1f18; box-shadow: inset 0 -2px 0 var(--acc); }
+  .pipe.on .name { color:var(--acc); }
+
   @media (max-width: 900px) { .visuals { grid-template-columns:1fr; } }
 </style>
 </head>
@@ -87,6 +96,15 @@
     <button class="btn" onclick="cmd('yaw_to','270')">W 270°</button>
   </div>
   <div class="cmdlog" id="cmdlog">—</div>
+
+  <!-- Süreç akışı: KAMERA → CNN → TESPİT → TAKİP → KOMUT -->
+  <div class="pipeline" id="pipeline">
+    <div class="pipe" id="p1"><div class="name">KAMERA</div><div class="val" id="pv1">—</div></div>
+    <div class="pipe" id="p2"><div class="name">CNN</div><div class="val" id="pv2">—</div></div>
+    <div class="pipe" id="p3"><div class="name">TESPİT</div><div class="val" id="pv3">—</div></div>
+    <div class="pipe" id="p4"><div class="name">TAKİP</div><div class="val" id="pv4">—</div></div>
+    <div class="pipe" id="p5"><div class="name">KOMUT</div><div class="val" id="pv5">—</div></div>
+  </div>
 
   <div class="status-line">
     Uçuş: <span id="time">0.0</span> s · Konum: <span id="pos">-</span> · Roll/Pitch: <span id="att">0°/0°</span>
@@ -155,6 +173,19 @@ async function tick() {
   try {
     const r = await fetch('/status');
     const s = await r.json();
+    // Süreç akışı: KAMERA → CNN → TESPİT → TAKİP → KOMUT
+    const on = ['p1','p2','p3','p4','p5'];
+    on.forEach(id => $(id).classList.remove('on'));
+    $('pv1').textContent = '160x120 @' + (s.fps||0).toFixed(1) + 'fps';
+    $('pv2').textContent = 'int8 · ' + (s.infer_ms||0).toFixed(1) + 'ms';
+    const d = s.det || {};
+    $('pv3').textContent = d.detected ? (d.class + ' %' + Math.round(d.conf*100)) : 'yok';
+    $('pv4').textContent = d.locked ? 'KİLİTLİ' : (d.detected ? 'İZLİYOR' : 'TARAMA');
+    $('pv5').textContent = s.uart || 'T+000Y+000';
+    if (d.locked) { $('p4').classList.add('on'); $('p5').classList.add('on'); }
+    else if (d.detected) { $('p3').classList.add('on'); }
+    else { $('p1').classList.add('on'); }
+    $('p2').classList.add('on');
     $('conn').className = s.connected ? 'on' : 'off';
     $('conn_txt').textContent = s.connected ? 'bağlı' : 'bağlantı yok';
     $('mode').textContent = s.mode;
