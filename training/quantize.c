@@ -38,13 +38,13 @@
 #define C1_W 432  /* 16×27 */
 #define C2_W 4608 /* 32×144 */
 #define FC1_W 131072 /* 2048×64 */
-#define FC2_W 256 /* 64×4 */
+#define FC2_W 320 /* 64×5 */
 
 /* Ağırlık düzenleri (row-major, satır = output kanal) */
 static const int C1_OUT = 16, C1_IN = 27;
 static const int C2_OUT = 32, C2_IN = 144;
 static const int FC1_OUT = 64, FC1_IN = 2048;
-static const int FC2_OUT = 4, FC2_IN = 64;
+static const int FC2_OUT = N_CLASSES, FC2_IN = 64;
 
 /* ---------- int8 quantize yardımcıları ---------- */
 
@@ -300,7 +300,7 @@ int main(int argc, char **argv) {
             fc1q[i * FC1_OUT + o] = q_round(fc1_w[i * FC1_OUT + o], fc1_s[o].scale);
         fc1bq[o] = q_round(fc1_b[o], fc1_s[o].scale);
     }
-    /* FC2: input-major düzen (64×4, w[i*4+o]) */
+    /* FC2: input-major düzen (64×5, w[i*5+o]) */
     for (int o = 0; o < FC2_OUT; o++) {
         double mn = 1e30, mx = -1e30;
         for (int i = 0; i < FC2_IN; i++) {
