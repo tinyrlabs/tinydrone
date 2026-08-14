@@ -570,7 +570,7 @@ def render_camera(dx, dy, yaw, alt=10.0):
 
 
 def cnn_loop():
-    """Her ~180ms: kamera render → hedef patch sınıflandır (kilitli takip)."""
+    """~60 FPS: kamera render → CNN → tespit → UART (gerçek zamanlı)."""
     global td
     try:
         td = TinyDrone()
@@ -647,7 +647,7 @@ def cnn_loop():
             last = time.time()
         except Exception as e:
             print(f"[CNN] hata: {e}")
-        time.sleep(0.18)
+        time.sleep(0.008)  # ~65 FPS sabit (döngü ~7ms: render+CNN+JPEG)
 
 
 def _frame_to_jpeg(frame, det):

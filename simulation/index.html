@@ -127,8 +127,8 @@ async function cmd(act, val) {
   } catch(e) { $('cmdlog').textContent = 'komut gönderilemedi'; }
 }
 
-// Kamera görüntüsü — ~4 Hz yenile (canlı video hissi)
-setInterval(() => { $('cam').src = '/cam?t=' + Date.now(); }, 250);
+// Kamera görüntüsü — ~10 FPS akış (ağ üzerinden makul; lokal/stand'da tam akıcı)
+setInterval(() => { $('cam').src = '/cam?t=' + Date.now(); }, 100);
 
 // Sahne canvas
 const cv = $('scene'), ctx = cv.getContext('2d');
@@ -141,7 +141,8 @@ function drawScene(s) {
   // Ölçek: 1m = 16px, merkez = drone
   const scale = 16, ox = 320, oy = 200;
   // Hedefler (dinamik pozisyonlar — hareketli hedef canlı izlenir)
-  const tgts = Object.entries(s.targets || {}).map(([id, xy]) => ({id, x: xy[0], y: xy[1]}));
+  const tgts = Object.entries(s.targets || {}).map(([id, v]) =>
+    ({id, x: Array.isArray(v) ? v[0] : v.x, y: Array.isArray(v) ? v[1] : v.y}));
   tgts.forEach(t => {
     const x = ox + t.x * scale, y = oy - t.y * scale;
     ctx.fillStyle = '#b91c1c';
@@ -215,6 +216,7 @@ async function tick() {
     } else {
       dl.innerHTML = 'Hedef görüşte değil — drone\'u hedefe doğru çevir';
     }
+    sdata = s;  // rAF döngüsü için son veri
     drawScene(s);
   } catch (e) {
     $('conn').className = 'off';
@@ -222,7 +224,33 @@ async function tick() {
   }
 }
 tick();
-setInterval(tick, 500);
+setInterval(tick, 200);
+
+// Sahne: 60 FPS canvas (veri 5 Hz — lerp ile akıcı hareket)
+let sdata = null, sm = null;
+const lerp = (a, b, t) => a + (b - a) * t;
+const angLerp = (a, b, t) => { const d = (b - a + 540) % 360 - 180; return a + d * t; };
+function rafLoop() {
+  if (sdata) {
+    if (!sm) {
+      sm = { dx: sdata.drone_x, dy: sdata.drone_y, yaw: sdata.drone_yaw, tgts: {} };
+    }
+    sm.dx = lerp(sm.dx, sdata.drone_x, 0.25);
+    sm.dy = lerp(sm.dy, sdata.drone_y, 0.25);
+    sm.yaw = angLerp(sm.yaw, sdata.drone_yaw, 0.15);
+    if (sdata.targets) {
+      for (const [id, xy] of Object.entries(sdata.targets)) {
+        if (!sm.tgts[id]) sm.tgts[id] = { x: xy[0], y: xy[1] };
+        sm.tgts[id].x = lerp(sm.tgts[id].x, xy[0], 0.2);
+        sm.tgts[id].y = lerp(sm.tgts[id].y, xy[1], 0.2);
+      }
+    }
+    drawScene({ ...sdata, drone_x: sm.dx, drone_y: sm.dy,
+                drone_yaw: ((sm.yaw % 360) + 360) % 360, targets: sm.tgts });
+  }
+  requestAnimationFrame(rafLoop);
+}
+requestAnimationFrame(rafLoop);
 </script>
 </body>
 </html>
