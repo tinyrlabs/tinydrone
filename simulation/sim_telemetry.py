@@ -47,7 +47,7 @@ TARGETS = [
      "cls": 0, "dir": "tank"},
     {"id": "hangar",     "x": -8.0, "y": 3.0, "size": 12.0,
      "cls": 4, "dir": "military_building"},
-    {"id": "armored",    "x": 3.0,  "y": -4.0, "size": 2.2,
+    {"id": "armored",    "x": 4.0,  "y": -5.0, "size": 2.2,
      "cls": 1, "dir": "armored_vehicle"},
 ]
 
@@ -81,6 +81,24 @@ BG_TILES = _load_bg_tiles()
 
 # Render yüksek çözünürlükte yapılıp küçültülür (yumuşak görüntü — mozaik yok)
 R_W, R_H = 320, 240
+
+# Gerçek kamera modeli: hafif aşağı bakan kamera (pitch 45°), dikey FOV 45°
+CAM_PITCH = 45.0
+V_FOV = 45.0
+FOCAL_Y = (R_H / 2) / np.tan(np.radians(V_FOV / 2))  # ~290
+
+
+def persp_coeffs(w, h, top_inset):
+    """Zemin trapez transform katsayıları: üst (uzak) daralır, alt (yakın) geniş."""
+    src = np.array([[0, 0], [w, 0], [0, h], [w, h]], dtype=float)
+    dst = np.array([[top_inset, 0], [w - top_inset, 0], [0, h], [w, h]], dtype=float)
+    A, B = [], []
+    for (x, y), (xp, yp) in zip(src, dst):
+        A.append([x, y, 1, 0, 0, 0, -x * xp, -y * xp]); B.append(xp)
+        A.append([0, 0, 0, x, y, 1, -x * yp, -y * yp]); B.append(yp)
+    return np.linalg.solve(np.array(A), np.array(B)).tolist()
+
+PERSP = persp_coeffs(R_W, R_H, int(R_W * 0.34))  # üst %34 daralma
 
 # ---------- Canlı durum (thread'ler arası paylaşım) ----------
 STATE = {
@@ -243,47 +261,57 @@ def start_sitl():
 
 
 def render_camera(dx, dy, yaw, alt=10.0):
-    """Drone (dx,dy) NED + yaw (derece) + alt (m) → 160x120 kamera görüntüsü.
-    320x240'ta render edilip küçültülür (yumuşak, düzgün görüntü).
-    Zemin drone hareketiyle kayar, hedef boyutu 3D mesafeye göre ölçeklenir."""
-    scale = R_W / FRAME_W  # 2.0
+    """Drone kamerasının gördüğü gerçek perspektif görüntü (160x120).
+
+    - Kamera 40° aşağı eğik: zemin trapez perspektifle daralır (uzakta)
+    - Hedef konumu mesafeye göre: uzak hedef ufka yakın, yakın hedef alta
+    - Hedef boyutu 3D mesafeye göre (irtifa + mesafe)
+    - Zemin drone hareketiyle kayar
+    """
+    rad = np.radians(yaw)
+    # --- Gökyüzü + zemin ---
     if BG_TILES:
-        img = Image.new("RGB", (R_W, R_H))
-        rad = np.radians(yaw)
+        # Zemin düz tile (model tanıyor — perspektif transform modeli bozuyor)
+        big = Image.new("RGB", (R_W, R_H))
         off_x = int((-dx * np.cos(rad) - dy * np.sin(rad)) * 4) % 80
         off_y = int((dx * np.sin(rad) - dy * np.cos(rad)) * 4) % 80
         seed = int(time.time() * 3)
-        for ty in range(-80, R_H, 80):
-            for tx in range(-80, R_W, 80):
+        for ty in range(-80, R_H + 80, 80):
+            for tx in range(-80, R_W + 80, 80):
                 tile = BG_TILES[(seed + (ty + off_y) // 80 + (tx + off_x) // 80) % len(BG_TILES)]
-                img.paste(tile, (tx + off_x, ty + off_y))
+                big.paste(tile, (tx + off_x, ty + off_y))
+        ground = big
     else:
-        frame = np.full((R_H, R_W, 3), 96, dtype=np.uint8)
-        img = Image.fromarray(frame)
+        ground = Image.new("RGB", (R_W, R_H), (90, 95, 70))
+    # Zemin tam ekran (gökyüzü bandı modelde yanlış pozitif veriyordu)
+    img = ground
 
+    # --- Hedefler: mesafeye göre ekran y + boyut ---
     for t in TARGETS:
         vx, vy = t["x"] - dx, t["y"] - dy
-        r3d = np.hypot(np.hypot(vx, vy), alt)
+        r = np.hypot(vx, vy)  # yatay mesafe
+        r3d = np.hypot(r, alt)
         if r3d < 1.0:
             continue
         theta = np.degrees(np.arctan2(vy, vx))
         delta = (theta - yaw + 180) % 360 - 180
         if abs(delta) > FOV_DEG / 2:
             continue
-        # Yüksek çözünürlükte çiz (scale ×)
         sx = R_W / 2 + (delta / (FOV_DEG / 2)) * (R_W / 2)
-        size_px = int(t["size"] / r3d * FOCAL * scale)
-        size_px = max(8, min(size_px, R_W))
+        # Dikey: hedef yer seviyesinde — kamera 40° aşağı bakıyor
+        gamma = np.degrees(np.arctan2(alt, r))          # hedefin alt açısı
+        sy = int(R_H / 2 + np.tan(np.radians(gamma - CAM_PITCH)) * FOCAL_Y)
+        size_px = int(t["size"] / r3d * FOCAL * 2.0)
+        size_px = max(6, min(size_px, R_W))
         imgs = TARGET_IMGS.get(t["id"])
         if not imgs:
             continue
         # SABİT görsel — dönen görseller captcha "araç seçin" efekti veriyordu
         tgt = imgs[0]
         tgt = tgt.resize((size_px, size_px), Image.BILINEAR)
-        sy = int(R_H * 0.55)
         # NOT: mask'sız paste — RGB görsel mask olamaz ("bad transparency mask")
-        img.paste(tgt, (int(sx - size_px / 2), sy))
-    # Yumuşak küçültme → 160x120 (mozaik/captcha görünümü yok)
+        img.paste(tgt, (int(sx - size_px / 2), int(sy - size_px / 2)))
+    # Yumuşak küçültme → 160x120
     return np.asarray(img.resize((FRAME_W, FRAME_H), Image.BILINEAR))
 
 
