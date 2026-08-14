@@ -16,6 +16,15 @@
 #include "tinydrone_model_int8.h"
 #include "model.h"  /* float bias değerleri (tinydrone_model.h kopyası) */
 
+/* ESP-IDF build'inde Xtensa SIMD dot product (Aşama D — ESP-DSP).
+ * Host testlerde (aarch64) CONFIG_IDF_TARGET_ESP32 tanımsız → saf C yolu. */
+#if defined(CONFIG_IDF_TARGET_ESP32) || defined(CONFIG_IDF_TARGET_ESP32S3)
+#include "dsps_dotprod.h"
+#define TD_USE_DSP 1
+#else
+#define TD_USE_DSP 0
+#endif
+
 #define IMG_H 32
 #define IMG_W 32
 #define IMG_C 3
@@ -39,26 +48,41 @@ static void conv2d_i8(const int8_t *input, int in_c, int in_h, int in_w,
     *out_h = oh;
     *out_w = ow;
 
+    const int win = in_c * k * k;          /* patch eleman sayısı */
+    int8_t patch[16 * 3 * 3];              /* max 144 (conv2: 16ch×3×3) */
+
     for (int oc = 0; oc < out_c; oc++) {
         const int8_t *wrow = &w[oc * in_c * k * k];
         float ws = w_scale[oc];
         for (int oy = 0; oy < oh; oy++) {
             for (int ox = 0; ox < ow; ox++) {
-                int32_t acc = 0;
+                /* Patch'i contiguous buffer'a topla (padding=0) */
+                int n = 0;
                 for (int ic = 0; ic < in_c; ic++) {
                     for (int ky = 0; ky < k; ky++) {
                         int iy = oy + ky - pad;
-                        if (iy < 0 || iy >= in_h) continue;
+                        if (iy < 0 || iy >= in_h) {
+                            for (int z = 0; z < k; z++) patch[n++] = 0;
+                            continue;
+                        }
                         for (int kx = 0; kx < k; kx++) {
                             int ix = ox + kx - pad;
-                            if (ix < 0 || ix >= in_w) continue;
-                            /* (x_q - x_zero) * w_q — zero-point düzeltmesi */
-                            int32_t iv = (int32_t)input[ic * in_h * in_w + iy * in_w + ix] - (int32_t)in_zero;
-                            int32_t wv = (int32_t)wrow[ic * k * k + ky * k + kx];
-                            acc += iv * wv;
+                            if (ix < 0 || ix >= in_w) {
+                                patch[n++] = 0;
+                            } else {
+                                patch[n++] = (int8_t)((int32_t)input[ic * in_h * in_w + iy * in_w + ix] - in_zero);
+                            }
                         }
                     }
                 }
+#if TD_USE_DSP
+                int32_t acc;
+                dsps_dp_s8(patch, wrow, &acc, win);
+#else
+                int32_t acc = 0;
+                for (int i = 0; i < win; i++)
+                    acc += (int32_t)patch[i] * (int32_t)wrow[i];
+#endif
                 /* float bias ekle: out = acc * (ws * input_scale) + bias */
                 float val = (float)acc * ws * input_scale + (float)bias[oc];
                 /* scale → int8 */
