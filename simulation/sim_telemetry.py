@@ -198,17 +198,22 @@ def start_sitl():
     return proc
 
 
-def render_camera(dx, dy, yaw):
-    """Drone (dx,dy) NED + yaw (derece) → 160x120 kamera görüntüsü (numpy RGB).
-    Zemin: gerçek background görselleri tile (model tanır). Hedefler görüş
-    açısındaysa gerçek dataset görseliyle çizilir."""
+def render_camera(dx, dy, yaw, alt=10.0):
+    """Drone (dx,dy) NED + yaw (derece) + alt (m) → 160x120 kamera görüntüsü.
+    Zemin drone hareketiyle kayar (gerçekçi canlı görüntü), hedef boyutu
+    3D mesafeye (yükseklik dahil) göre ölçeklenir."""
     if BG_TILES:
         img = Image.new("RGB", (FRAME_W, FRAME_H))
-        seed = int(time.time() * 2)
-        for ty in range(0, FRAME_H, 40):
-            for tx in range(0, FRAME_W, 40):
-                tile = BG_TILES[(seed + ty // 40 + tx // 40) % len(BG_TILES)]
-                img.paste(tile, (tx, ty))
+        # Zemin offset — drone konumuna bağlı (yaw ile döndürülmüş kayma)
+        rad = np.radians(yaw)
+        # Kamera yaw yönünde bakarken zemin ters yönde kayar
+        off_x = int((-dx * np.cos(rad) - dy * np.sin(rad)) * 2) % 40
+        off_y = int((dx * np.sin(rad) - dy * np.cos(rad)) * 2) % 40
+        seed = int(time.time() * 3)
+        for ty in range(-40, FRAME_H, 40):
+            for tx in range(-40, FRAME_W, 40):
+                tile = BG_TILES[(seed + (ty + off_y) // 40 + (tx + off_x) // 40) % len(BG_TILES)]
+                img.paste(tile, (tx + off_x, ty + off_y))
     else:
         frame = np.full((FRAME_H, FRAME_W, 3), 96, dtype=np.uint8)
         for y in range(FRAME_H):
@@ -217,18 +222,18 @@ def render_camera(dx, dy, yaw):
         img = Image.fromarray(frame)
 
     for t in TARGETS:
-        # Hedefe vektör (drone'dan)
+        # Hedefe vektör (drone'dan) — 3D mesafe (yükseklik dahil)
         vx, vy = t["x"] - dx, t["y"] - dy
-        r = np.hypot(vx, vy)
-        if r < 0.5:
+        r3d = np.hypot(np.hypot(vx, vy), alt)
+        if r3d < 1.0:
             continue
         theta = np.degrees(np.arctan2(vy, vx))  # kuzeyden (NED x=kuzey)
         delta = (theta - yaw + 180) % 360 - 180   # -180..180
         if abs(delta) > FOV_DEG / 2:
             continue  # görüş dışı
-        # Ekran konumu ve boyutu (mesafeye göre)
+        # Ekran konumu ve boyutu (3D mesafeye göre — irtifa artınca küçülür)
         sx = FRAME_W / 2 + (delta / (FOV_DEG / 2)) * (FRAME_W / 2)
-        size_px = int(t["size"] / r * FOCAL)
+        size_px = int(t["size"] / r3d * FOCAL)
         size_px = max(8, min(size_px, FRAME_W))
         # Görsel seç (döngüsel)
         imgs = TARGET_IMGS.get(t["id"])
@@ -244,7 +249,7 @@ def render_camera(dx, dy, yaw):
 
 
 def cnn_loop():
-    """Her 300ms: kamera render → CNN tespit → STATE güncelle."""
+    """Her ~180ms: kamera render → CNN tespit → STATE güncelle (canlı video)."""
     global td
     try:
         td = TinyDrone()
@@ -257,7 +262,8 @@ def cnn_loop():
             with STATE_LOCK:
                 dx, dy = STATE["drone_x"], STATE["drone_y"]
                 yaw = STATE["drone_yaw"]
-            frame = render_camera(dx, dy, yaw)
+                alt = STATE["drone_alt"]
+            frame = render_camera(dx, dy, yaw, alt)
             det = td.detect_track(frame)
             with STATE_LOCK:
                 STATE["det"] = det
@@ -266,7 +272,7 @@ def cnn_loop():
             last = time.time()
         except Exception as e:
             print(f"[CNN] hata: {e}")
-        time.sleep(0.3)
+        time.sleep(0.18)
 
 
 def _frame_to_jpeg(frame, det):

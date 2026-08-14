@@ -106,8 +106,8 @@ async function cmd(act, val) {
   } catch(e) { $('cmdlog').textContent = 'komut gönderilemedi'; }
 }
 
-// Kamera görüntüsü — 2 Hz yenile
-setInterval(() => { $('cam').src = '/cam?t=' + Date.now(); }, 500);
+// Kamera görüntüsü — ~4 Hz yenile (canlı video hissi)
+setInterval(() => { $('cam').src = '/cam?t=' + Date.now(); }, 250);
 
 // Sahne canvas
 const cv = $('scene'), ctx = cv.getContext('2d');
