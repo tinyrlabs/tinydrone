@@ -267,23 +267,41 @@ git clone tinyrlabs/tinydrone && cd tinydrone/simulation
 | GPU: RTX 4050 | 3D render için harika (moderngl/Webots); CNN için gerekmez (CPU yeterli) |
 | Gazebo stratejisi | Windows'ta native Gazebo yok → **WSL2 + Ubuntu** opsiyonu veya Python görselleştirici |
 
-### 8.6 Windows Deployment Kararı (iki yol)
+### 8.6 Windows Deployment Kararı — YOL 2 ANA YOL (1+ yıl süre)
 
-**Yol 1 — Python Görselleştirici (ÖNERİLEN, garantili)**
-- Windows native, kurulum ~10 dk: `python -m venv` + `pip install pygame numpy opencv-python moderngl`
-- CNN: int8 model Python'a taşınır (numpy ile — aynı ağırlıklar, aynı doğruluk; doğrulama sunucuda compare ile yapılır)
-- 3D render: moderngl + RTX 4050 → akıcı sahne
-- 4 panelli süreç gösterimi: pygame/OpenCV overlay
-- **Risk: yok — her Windows'ta çalışır**
+**Kullanıcı kararı:** 1 yıldan fazla süre var → gerçek Gazebo simülasyonu ana yol. Acele MVP gerekmiyor.
 
-**Yol 2 — WSL2 + Gazebo (hedef, ileri faz)**
-- WSL2 + Ubuntu → Gazebo (gz-sim) + ArduPilot SITL native Linux ortamı
-- WSLg ile GUI (Gazebo penceresi Windows'ta görünür)
-- RTX 4050 WSL2'de CUDA destekli (render hızlanır)
-- **Risk:** kurulum 1-2 saat, WSLg render performansı değişken, standda sürpriz çıkabilir
-- **Öneri:** Geliştirme/doğrulama ortamı olarak sunucuda; laptopta opsiyonel ikinci faz
+**Yol 2 — WSL2 + Ubuntu 22.04 + Gazebo Classic 11 + ArduPilot SITL (ANA YOL)**
 
-**Sunum stratejisi:** Çekirdek her iki yolda aynı (CNN + tespit + takip + süreç paneli). Yol 1 garantili gösterim; Yol 2 zaman kalırsa eklenecek gerçek Gazebo dünyası.
+| Bileşen | Neden |
+|---------|-------|
+| WSL2 (x86 Ubuntu 22.04) | Gazebo Classic 11 + ArduPilot SITL için **en olgun** kombinasyon (ArduPilot'ın resmi gazebo-ardupilot-sitl desteği Classic'e dayalı) |
+| RTX 4050 | WSL2 + WSLg ile GUI; CUDA destekli render |
+| Ubuntu 22.04 (24.04 değil!) | 22.04'te `apt install gazebo` var; 24.04'te kaldırıldı |
+
+**Neden Gazebo Classic 11:** ArduPilot ↔ Gazebo köprüsü (gazebo-ardupilot-sitl) Classic ile olgun ve belgelenmiş; gz-sim (Harmonic) daha yeni ve ARM/Windows'da sorunlu. Classic + SITL = standart PX4/ArduPilot eğitim yolu.
+
+**Geliştirme/gösterim akışı:**
+```
+SUNUCU (ARM) — geliştirme/kod        LAPTOP (WSL2 x86) — çalıştırma/gösterim
+- CNN eğitimi, model, testler ✅      - Git clone → ./setup_wsl.sh
+- Gazebo world/plugin kodları        - Gazebo + SITL + CNN bridge
+- CNN bridge (Python + C lib)        - 4 panelli süreç gösterimi
+- repo'ya push                       - RTX 4050 render
+```
+
+**Yol 1 (Python görselleştirici):** Fallback/yardımcı katman olarak kalır — süreç paneli ve hızlı testler için. Ana gösterim Gazebo.
+
+**Zaman çizelgesi (12 ay):**
+
+| Dönem | İş |
+|-------|-----|
+| Ay 1-2 | WSL2 + Gazebo + SITL kurulum rehberi + POC (drone uçuyor) |
+| Ay 2-4 | Sanal dünya tasarımı (arazi + hedef modeller) + CNN bridge |
+| Ay 4-6 | Otonom takip döngüsü + senaryolar (sabit/hareketli hedef) |
+| Ay 6-8 | Model iyileştirme: sim görüntülerinden veri toplama (domain adaptation) + simülasyondan gerçekçi dataset |
+| Ay 8-10 | Stand paketi + sunum materyalleri + video |
+| Ay 10-12 | Donanım (ESP32-CAM) + gerçek drone entegrasyonu (arkadaşla) — simde doğrulanan kod aynen |
 
 ---
 
