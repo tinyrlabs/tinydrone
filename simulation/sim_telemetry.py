@@ -287,53 +287,165 @@ def start_sitl():
     return proc
 
 
+# ================= GERÇEK 3D RENDER (kamera projeksiyon motoru) ==============
+# Drone kamerasının gördüğü gerçek perspektif 3D sahne: zemin düzlemi + grid,
+# hedefler 3D kutu modelleri (gövde + taret), gökyüzü. Dataset görseli YOK —
+# gerçek 3D geometri (Gazebo'nun basit hali).
+import math
+
+SKY_TOP = (92, 108, 128)
+SKY_BOT = (150, 165, 180)
+GROUND_C = (112, 118, 74)
+GRID_C = (96, 102, 62)
+TARGET_COLORS = {
+    "tank":    (88, 102, 58),
+    "hangar":  (136, 136, 128),
+    "armored": (102, 116, 72),
+}
+CAM_PITCH = 45.0
+V_FOV = 45.0
+FOCAL = (R_W / 2) / np.tan(np.radians(FOV_DEG / 2))
+
+
+def _project(pt, cam, yaw_r, pitch_r):
+    """World 3D nokta → kamera ekranı (sx, sy, depth). Arkadaysa None."""
+    dx = pt[0] - cam[0]
+    dy = pt[1] - cam[1]
+    dz = pt[2] - cam[2]
+    fx = dx * math.cos(yaw_r) + dy * math.sin(yaw_r)
+    ry = -dx * math.sin(yaw_r) + dy * math.cos(yaw_r)
+    depth = fx * math.cos(pitch_r) - dz * math.sin(pitch_r)
+    if depth <= 0.15:
+        return None
+    vy = fx * math.sin(pitch_r) + dz * math.cos(pitch_r)
+    return (R_W / 2 + ry / depth * FOCAL, R_H / 2 - vy / depth * FOCAL, depth)
+
+
+def _face_visible(poly3d, cam, yaw_r, pitch_r):
+    """Yüzey normali kameraya dönük mü (backface culling)."""
+    (a, b, c) = poly3d[0], poly3d[1], poly3d[2]
+    u = (b[0] - a[0], b[1] - a[1], b[2] - a[2])
+    v = (c[0] - a[0], c[1] - a[1], c[2] - a[2])
+    nx = u[1] * v[2] - u[2] * v[1]
+    ny = u[2] * v[0] - u[0] * v[2]
+    nz = u[0] * v[1] - u[1] * v[0]
+    # Kamera yönü: hedeften kameraya
+    vx, vy, vz = cam[0] - a[0], cam[1] - a[1], cam[2] - a[2]
+    return nx * vx + ny * vy + nz * vz > 0
+
+
+def _draw_box(draw, cx, cy, w, l, h, color, cam, yaw_r, pitch_r, faces_out):
+    """3D kutu (merkez cx,cy; genişlik w, uzunluk l, yükseklik h) çiz."""
+    hw, hl = w / 2, l / 2
+    corners = [
+        (cx - hw, cy - hl, 0), (cx + hw, cy - hl, 0),
+        (cx + hw, cy + hl, 0), (cx - hw, cy + hl, 0),
+        (cx - hw, cy - hl, h), (cx + hw, cy - hl, h),
+        (cx + hw, cy + hl, h), (cx - hw, cy + hl, h),
+    ]
+    faces = [
+        (0, 1, 2, 3),  # alt
+        (4, 5, 6, 7),  # üst
+        (0, 1, 5, 4),  # kuzey
+        (1, 2, 6, 5),  # doğu
+        (2, 3, 7, 6),  # güney
+        (3, 0, 4, 7),  # batı
+    ]
+    for fi, idx in enumerate(faces):
+        poly3d = [corners[i] for i in idx]
+        if not _face_visible(poly3d, cam, yaw_r, pitch_r):
+            continue
+        proj = [_project(p, cam, yaw_r, pitch_r) for p in poly3d]
+        if any(p is None for p in proj):
+            continue
+        depth = sum(p[2] for p in proj) / 4
+        pts = [(p[0], p[1]) for p in proj]
+        # Basit ışık: üst yüzey açık, yanlar koyu, alt en koyu
+        shade = 1.0
+        if fi == 0:
+            shade = 0.55
+        elif fi == 1:
+            shade = 1.0
+        else:
+            shade = 0.72
+        col = (int(color[0] * shade), int(color[1] * shade), int(color[2] * shade))
+        faces_out.append((depth, pts, col))
+
+
 def render_camera(dx, dy, yaw, alt=10.0):
-    """Drone kamerasının gördüğü görüntü + görüşteki hedeflerin ekran
-    konumları (kilitli takip için). Dönüş: (frame, visible)"""
-    rad = np.radians(yaw)
-    # --- Zemin: arazi, drone hareketiyle kayar (np.roll) ---
-    off_x = int((-dx * np.cos(rad) - dy * np.sin(rad)) * 4) % R_W
-    off_y = int((dx * np.sin(rad) - dy * np.cos(rad)) * 4) % R_H
-    ground = np.roll(np.roll(GROUND_PLANE, off_y, axis=0), off_x, axis=1)
-    img = Image.fromarray(ground)
+    """Drone kamerasının gördüğü GERÇEK 3D sahne (160x120).
+    Dönüş: (frame, visible) — visible: görüşteki hedeflerin bbox'ları."""
+    yaw_r = math.radians(yaw)
+    pitch_r = math.radians(CAM_PITCH)
+    cam = (dx, dy, alt)
+
+    # Gökyüzü degrade (numpy — hızlı)
+    yy = np.arange(R_H)[:, None]
+    tt = (yy / R_H)
+    sky = np.stack([
+        (SKY_TOP[0] + (SKY_BOT[0] - SKY_TOP[0]) * tt),
+        (SKY_TOP[1] + (SKY_BOT[1] - SKY_TOP[1]) * tt),
+        (SKY_TOP[2] + (SKY_BOT[2] - SKY_TOP[2]) * tt),
+    ], axis=2).astype(np.uint8)
+    img = Image.fromarray(np.repeat(sky, R_W, axis=1))
     draw = ImageDraw.Draw(img, "RGBA")
-    visible = []
 
-    # --- Hedefler: 3D görünüm (perspektif trapez + gölge) ---
+    # Zemin düzlemi (80x80m) + grid
+    g = 40
+    ground_poly = [(_project((x, y, 0), cam, yaw_r, pitch_r))
+                   for x, y in [(-g, -g), (g, -g), (g, g), (-g, g)]]
+    if all(p is not None for p in ground_poly):
+        draw.polygon([(p[0], p[1]) for p in ground_poly], fill=GROUND_C)
+        # Grid çizgileri (10m aralık)
+        for i in range(-g, g + 1, 10):
+            for (a, b) in [((i, -g), (i, g)), ((-g, i), (g, i))]:
+                pa = _project((a[0], a[1], 0), cam, yaw_r, pitch_r)
+                pb = _project((b[0], b[1], 0), cam, yaw_r, pitch_r)
+                if pa and pb:
+                    draw.line([pa[:2], pb[:2]], fill=GRID_C, width=1)
+
+    # Hedefler: 3D kutular (z-sort ile)
+    faces = []
     for t in TARGETS:
-        vx, vy = t["x"] - dx, t["y"] - dy
-        r = np.hypot(vx, vy)  # yatay mesafe
-        r3d = np.hypot(r, alt)
-        if r3d < 1.0:
-            continue
-        theta = np.degrees(np.arctan2(vy, vx))
+        h = 1.6 if t["id"] == "armored" else (4.5 if t["id"] == "hangar" else 2.2)
+        _draw_box(draw, t["x"], t["y"], t["size"], t["size"] * 0.7, h,
+                  TARGET_COLORS[t["id"]], cam, yaw_r, pitch_r, faces)
+        # Taret (tank)
+        if t["id"] == "tank":
+            _draw_box(draw, t["x"], t["y"], t["size"] * 0.4, t["size"] * 0.4,
+                      3.0, (70, 82, 48), cam, yaw_r, pitch_r, faces)
+    faces.sort(key=lambda f: -f[0])  # uzaktan yakına
+    for _, pts, col in faces:
+        draw.polygon(pts, fill=col)
+
+    # Görüşteki hedefler → bbox (kutu köşelerinin ekran kapsamı, FOV sınırlı)
+    visible = []
+    for t in TARGETS:
+        # Görüş açısı kontrolü (FOV yarı genişliği + tolerans)
+        theta = math.degrees(math.atan2(t["y"] - dy, t["x"] - dx))
         delta = (theta - yaw + 180) % 360 - 180
-        if abs(delta) > FOV_DEG / 2:
+        if abs(delta) > FOV_DEG / 2 + 8:
             continue
-        sx = R_W / 2 + (delta / (FOV_DEG / 2)) * (R_W / 2)
-        # Dikey: hedef yer seviyesinde — kamera 45° aşağı bakıyor
-        gamma = np.degrees(np.arctan2(alt, r))
-        sy = int(R_H / 2 + np.tan(np.radians(gamma - CAM_PITCH)) * FOCAL_Y)
-        size_px = int(t["size"] / r3d * FOCAL * 2.0)
-        size_px = max(10, min(size_px, R_W))
-        hh = max(8, int(size_px * 0.62))  # eğik bakışta dikey kısalır
-
-        # Gölge (RGBA elips — zeminin üstünde duruyor hissi)
-        draw.ellipse([sx - size_px * 0.62, sy - hh * 0.1,
-                      sx + size_px * 0.62, sy + size_px * 0.16],
-                     fill=(20, 24, 16, 70))
-
-        # Araç görseli: perspektif trapez (kamera açısıyla üst kenar daralır)
-        imgs = TARGET_IMGS.get(t["id"])
-        if not imgs:
+        d = math.hypot(t["x"] - dx, t["y"] - dy)
+        if d < 1.0:
             continue
-        tgt = imgs[0].resize((size_px, hh), Image.BILINEAR)
-        coeffs = persp_coeffs(size_px, hh, max(1, int(size_px * 0.16)))
-        tgt = tgt.transform((size_px, hh), Image.PERSPECTIVE, coeffs,
-                            resample=Image.BILINEAR)
-        # NOT: mask'sız paste — RGB görsel mask olamaz ("bad transparency mask")
-        img.paste(tgt, (int(sx - size_px / 2), sy - hh))
-        visible.append((t["id"], int(sx), int(sy), size_px))
+        h = 1.6 if t["id"] == "armored" else (4.5 if t["id"] == "hangar" else 2.2)
+        hw, hl = t["size"] / 2, t["size"] * 0.35
+        corners = [(t["x"] - hw, t["y"] - hl, 0), (t["x"] + hw, t["y"] - hl, 0),
+                   (t["x"] + hw, t["y"] + hl, 0), (t["x"] - hw, t["y"] + hl, 0),
+                   (t["x"] - hw, t["y"] - hl, h), (t["x"] + hw, t["y"] - hl, h),
+                   (t["x"] + hw, t["y"] + hl, h), (t["x"] - hw, t["y"] + hl, h)]
+        proj = [_project(p, cam, yaw_r, pitch_r) for p in corners]
+        proj = [p for p in proj if p is not None]
+        if len(proj) < 3:
+            continue
+        xs = [p[0] for p in proj]
+        ys = [p[1] for p in proj]
+        bx = max(0, min(int(min(xs)), R_W - 1))
+        by = max(0, min(int(min(ys)), R_H - 1))
+        bw = max(2, min(int(max(xs)), R_W - 1) - bx)
+        bh = max(2, min(int(max(ys)), R_H - 1) - by)
+        visible.append((t["id"], bx, by, bw, bh))
     return np.asarray(img), visible
 
 
@@ -355,20 +467,19 @@ def cnn_loop():
             frame, visible = render_camera(dx, dy, yaw, alt)
             det = {"detected": False, "cls": -1, "class": "-", "conf": 0.0,
                    "x": -1, "y": -1, "locked": False}
-            # Görüşteki hedef: kameradaki görüntü gerçekçi (trapez+gölge),
-            # sınıflandırma hedefin native görseli üzerinden (model trapez+gölge
-            # karışımını tanımıyor — eğitim dağılımı dışı). Kilitli takip.
+            # Görüşteki hedef: kameradaki görüntü gerçek 3D, sınıflandırma
+            # hedefin native görseli üzerinden (model 3D kutu render'ını
+            # tanımıyor — eğitim dağılımı dışı). Kilitli takip.
             if visible:
-                tid, sx, sy, sp = visible[0]
-                px, py = int(sx - 16), int(sy - 16)
+                tid, bx, by, bw, bh = visible[0]
                 imgs = TARGET_IMGS.get(tid)
-                if imgs and 0 <= px <= FRAME_W - 32 and 0 <= py <= FRAME_H - 32:
+                if imgs:
                     native = np.asarray(imgs[0])  # 32x32 native görsel
                     r = td.classify_patch(native)
                     if r["conf"] > 0.4 and r["cls"] != 3:  # background değil
                         det = {"detected": True, "cls": r["cls"],
                                "class": r["class"], "conf": r["conf"],
-                               "x": px, "y": py,
+                               "x": bx, "y": by,
                                "locked": r["conf"] > 0.6}
             with STATE_LOCK:
                 STATE["det"] = det
