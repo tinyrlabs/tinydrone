@@ -324,7 +324,8 @@ def track_loop():
             theta = math.degrees(math.atan2(pos[1] - dy, pos[0] - dx))
             delta = (theta - yaw + 180) % 360 - 180
             if abs(delta) > 12.0:  # görüşten sapınca hedefe dön
-                do_yaw_to(int(round(theta)) % 360)
+                r = do_yaw_to(int(round(theta)) % 360)
+                print(f"[TRACK] yaw {yaw:.0f} -> hedef {theta:.0f} (delta {delta:.0f}) r={r}")
         except Exception:
             pass
         time.sleep(1.0)
@@ -380,8 +381,13 @@ import math
 
 SKY_TOP = (92, 108, 128)
 SKY_BOT = (150, 165, 180)
-GROUND_C = (112, 118, 74)
-GRID_C = (96, 102, 62)
+GROUND_C = (118, 124, 72)
+GROUND_C2 = (108, 114, 66)
+GRID_C = (98, 104, 60)
+ROAD_C = (122, 108, 74)
+TREE_TRUNK = (96, 74, 48)
+TREE_LEAF = (52, 82, 44)
+TREE_LEAF2 = (44, 72, 38)
 TARGET_COLORS = {
     "tank":    (88, 102, 58),
     "hangar":  (136, 136, 128),
@@ -504,6 +510,45 @@ def render_camera(dx, dy, yaw, alt=10.0):
                 if pa and pb:
                     draw.line([pa[:2], pb[:2]], fill=GRID_C, width=1)
 
+        # Devriye yolları (hareketli hedeflerin patikaları — koyu şerit)
+        for t in TARGETS:
+            path = t.get("path")
+            if not path:
+                continue
+            rw = 1.1  # yol yarı genişliği (m)
+            for k in range(len(path)):
+                a = path[k]
+                b = path[(k + 1) % len(path)]
+                dxp, dyp = b[0] - a[0], b[1] - a[1]
+                ln = max(math.hypot(dxp, dyp), 0.01)
+                nx, ny = -dyp / ln, dxp / ln  # dik
+                quad = [(a[0] + nx * rw, a[1] + ny * rw),
+                        (b[0] + nx * rw, b[1] + ny * rw),
+                        (b[0] - nx * rw, b[1] - ny * rw),
+                        (a[0] - nx * rw, a[1] - ny * rw)]
+                pq = [_project((qx, qy, 0.02), cam, yaw_r, pitch_r)
+                      for qx, qy in quad]
+                if all(p is not None for p in pq):
+                    draw.polygon([(p[0], p[1]) for p in pq], fill=ROAD_C)
+
+        # Ortam: ağaçlar (billboard — gövde + taç)
+        TREES = [(-9, -8, 3.2), (11, -9, 2.6), (14, 3, 3.4), (-13, -5, 2.2),
+                 (9, 12, 3.0), (-15, 9, 2.8), (0, 14, 2.4), (16, -12, 2.6)]
+        for txx, tyy, tr in TREES:
+            bp = _project((txx, tyy, 0), cam, yaw_r, pitch_r)
+            tp = _project((txx, tyy, 2.2), cam, yaw_r, pitch_r)
+            cp = _project((txx, tyy, 4.2), cam, yaw_r, pitch_r)
+            if not (bp and tp and cp) or cp[2] <= 0.1:
+                continue
+            # Gövde
+            draw.line([bp[:2], tp[:2]], fill=TREE_TRUNK, width=max(2, int(tr)))
+            # Taç (daire — ekran yarıçapı mesafeyle ölçekli)
+            cr = tr / cp[2] * FOCAL_X
+            draw.ellipse([cp[0] - cr, cp[1] - cr * 0.85, cp[0] + cr,
+                          cp[1] + cr * 0.85], fill=TREE_LEAF)
+            draw.ellipse([cp[0] - cr * 0.62, cp[1] - cr * 0.55, cp[0] + cr * 0.62,
+                          cp[1] + cr * 0.5], fill=TREE_LEAF2)
+
     # Hedefler: 3D kutular (z-sort ile) — dinamik pozisyonlar + gerçek texture
     faces = []
     for t in TARGETS:
@@ -514,10 +559,28 @@ def render_camera(dx, dy, yaw, alt=10.0):
         tex = imgs[0] if imgs else None
         _draw_box(draw, img, pos[0], pos[1], t["size"], t["size"] * 0.7, h,
                   TARGET_COLORS[t["id"]], cam, yaw_r, pitch_r, faces, tex)
-        # Taret (tank)
+        # Taret + namlu (tank — devriye yönünde)
         if t["id"] == "tank":
             _draw_box(draw, img, pos[0], pos[1], t["size"] * 0.4, t["size"] * 0.4,
                       3.0, (70, 82, 48), cam, yaw_r, pitch_r, faces)
+            path = t.get("path")
+            if path:
+                bi, bd = 0, 1e9
+                for i, p in enumerate(path):
+                    d = (p[0] - pos[0]) ** 2 + (p[1] - pos[1]) ** 2
+                    if d < bd:
+                        bd, bi = d, i
+                nxt = path[(bi + 1) % len(path)]
+                dxp, dyp = nxt[0] - pos[0], nxt[1] - pos[1]
+                ln = max(math.hypot(dxp, dyp), 0.01)
+                ux, uy = dxp / ln, dyp / ln
+                _draw_box(draw, img, pos[0] + ux * 2.0, pos[1] + uy * 2.0,
+                          0.5, 3.4, 0.5, (56, 66, 38),
+                          cam, yaw_r, pitch_r, faces)
+        # Hangar kapısı (güney yüzde koyu şerit)
+        if t["id"] == "hangar":
+            _draw_box(draw, img, pos[0], pos[1] + 3.6, 3.4, 0.6, 3.4,
+                      (56, 56, 52), cam, yaw_r, pitch_r, faces)
     faces.sort(key=lambda f: -f[0])  # uzaktan yakına
     for item in faces:
         depth, pts, col, tex, proj = item
@@ -535,9 +598,12 @@ def render_camera(dx, dy, yaw, alt=10.0):
                 coeffs = _quad_coeffs(
                     [(0, 0), (tw - 1, 0), (tw - 1, th - 1), (0, th - 1)],
                     [(p[0] - x0, p[1] - y0) for p in dst])
-                mapped = tex.transform((wq, hq), Image.PERSPECTIVE, coeffs,
+                # Texture paste'ini max 160x120'de tut (büyük paste çok yavaş).
+                # CNN frame'i (160x120) zaten yüzeyi kaplar — model texture'ı görür.
+                pw, ph = min(wq, 160), min(hq, 120)
+                mapped = tex.transform((pw, ph), Image.PERSPECTIVE, coeffs,
                                        resample=Image.BILINEAR)
-                img.paste(mapped, (x0, y0))
+                img.paste(mapped, (x0 + (wq - pw) // 2, y0 + (hq - ph) // 2))
             except Exception:
                 pass
 
