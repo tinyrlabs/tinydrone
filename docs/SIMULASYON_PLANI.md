@@ -185,12 +185,93 @@ sudo apt install gz-harmonic   # osrf repo gerekebilir
 
 ---
 
-## 8. Başlangıç Kararları (onayın gereken)
+## 8. Laptop Deployment (sunum/gösterim ortamı)
+
+**Kullanıcı kararı:** Simülasyon, sunum sırasında GPU'lu ve ekranlı bir laptopta çalıştırılacak.
+Amaç: gerçek uçuş simülasyonundan çok **sürecin nasıl işlediğini anlatmak** (veri akışı gösterimi).
+
+### 8.1 Neden Laptop-Öncelikli Tasarım
+
+| Faktör | Etki |
+|--------|------|
+| CNN küçük (int8, 1.4M MAC) | **GPU gerekmez** — CPU'da 30+ FPS tespit; GPU opsiyonel (render) |
+| Ekran var | Canlı görsel gösterim — stand'ın kalbi |
+| Sunum ortamı | Tek laptopta çalışan, kolay kurulan sistem |
+| Cross-platform | Windows/Mac/Linux'ta çalışmalı (laptop OS bilinmiyor) |
+
+### 8.2 Mimari (laptop-öncelikli)
+
+```
+┌─────────────── LAPTOP (sunum) ───────────────┐
+│                                              │
+│  GÖRSEL KATMAN (seçenekler)                  │
+│  A. Python görselleştirici (garantili,       │
+│     pygame/OpenGL — her OS'ta çalışır)       │
+│  B. Gazebo/Webots (laptop OS'una bağlı,      │
+│     GPU ile render)                          │
+│              │ kamera görüntüsü (160x120)    │
+│              ▼                               │
+│  CNN KÖPRÜSÜ (ctypes + C kütüphanesi)        │
+│  → int8 model → tespit → bbox + sınıf + güven│
+│              │ offset                        │
+│              ▼                               │
+│  KONTROL (MAVLink → SITL veya sanal takip)   │
+│  → drone yaw/ileri → görsel katmana geri     │
+│                                              │
+│  SÜREÇ PANELİ: kamera→CNN→tespit→takip→komut │
+│  her adım canlı değerlerle (veri akışı anlatım)│
+└──────────────────────────────────────────────┘
+```
+
+### 8.3 Süreç Anlatımı Odaklı Panel (sunumun kalbi)
+
+Sunumda "nasıl çalışıyor" anlatmak için ekran 4 panele bölünür:
+
+| Panel | İçerik | Anlattığı |
+|-------|--------|-----------|
+| 1 | Sanal dünya (drone + hedef, 3D/2D) | "Drone sahadayken ne görür" |
+| 2 | Drone kamerası + CNN overlay | "Model her kareyi nasıl işler" (bbox, sınıf, güven) |
+| 3 | **Süreç akışı** (canlı pipeline) | "Veri nasıl akar": Kamera → CNN → Tespit → Takip → Komut, her adımda canlı değerler |
+| 4 | Telemetri | Yükseklik, yaw, GPS, FPS, kilit durumu |
+
+**Süreç paneli örneği:**
+```
+KAMERA ──▶ CNN ──▶ TESPİT ──▶ TAKİP ──▶ KOMUT
+160x120   int8    drone_uav   KİLİTLİ     YAW +12°
+30 FPS    2.5ms   %97.3       güven≥.60   ileri 2m/s
+```
+
+Bu panel, jüriye/izleyiciye **tüm sistemi tek bakışta** anlatır — drone'u uçurmadan.
+
+### 8.4 Kurulum (laptop'a taşıma)
+
+```bash
+# Tek script: gereksinimler + model + çalıştırma
+git clone tinyrlabs/tinydrone && cd tinydrone/simulation
+./setup.sh        # Python venv + pygame/OpenGL + ctypes lib derle
+./run_demo.sh     # Görselleştirici + CNN + panel başlat
+```
+
+- **CNN kütüphanesi:** `inference_int8.c` → paylaşımlı kütüphane (`libtinydrone.so` / `.dll` / `.dylib`) — model header'ları gömülü (0.43MB), ek dosya yok
+- **Bağımlılıklar:** Python 3 + pygame (2D) veya moderngl (3D) + OpenCV (overlay) — GPU şart değil
+- **Gazebo opsiyonu:** Laptop OS'una göre (Linux: Gazebo; Windows: WSL2; Mac: Webots) — çalışmazsa Panel 1 Python görselleştiriciyle doldurulur
+- **Geliştirme sunucuda, gösterim laptopta:** Kod tek repo, iki ortam — aynı CNN, aynı senaryolar
+
+### 8.5 Laptop Bilinmeyenleri (başlamadan netleşecek)
+
+1. İşletim sistemi? (Windows / macOS / Linux)
+2. GPU? (NVIDIA / AMD / Intel — opsiyonel render için)
+3. Sunumda internet var mı? (yoksa tamamen lokal çalışmalı — tasarım zaten lokal)
+
+---
+
+## 9. Başlangıç Kararları (onayın gereken)
 
 1. **Görselleştirici:** 2D (pygame, hızlı) mu 3D (OpenGL, etkileyici) mi? → Öneri: 2D ile başla, 3D'ye geç
 2. **CNN bağlama:** ctypes + C kütüphanesi mi (performans, aynı kod) Python repro mu? → Öneri: ctypes
 3. **Gazebo:** POC yapalım mı yoksa direkt Katman 1 ile mi gidelim? → Öneri: POC'u 1 günde dene, başarısızsa Katman 1
 4. **SITL mi PX4 mü?** → Öneri: ArduPilot SITL (ARM'de derlenir, Gazebo desteği, MAVLink)
+5. **Laptop OS/GPU?** → Sunum ortamını bilirsek deployment buna göre kesinleşir
 
 ---
 
