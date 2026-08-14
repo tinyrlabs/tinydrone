@@ -8,7 +8,7 @@
  *       Gerçek drone için int8 quantization önerilir (Faz 4.5).
  */
 
-#include "inference.h"
+#include "float_inference.h"
 #include <math.h>
 #include <string.h>
 

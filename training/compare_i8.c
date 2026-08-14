@@ -14,7 +14,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 
-#include "inference.h"      /* float */
+#include "float_inference.h"      /* float */
 #include "inference_int8.h" /* int8 */
 
 static const char *CLASS_NAMES[] = {"tank", "armored_vehicle", "drone_uav", "background"};
