@@ -17,7 +17,7 @@
 #define SW_WIN 32
 #define SW_STRIDE_COARSE 16
 #define SW_STRIDE_FINE 4
-#define SW_NUM_CLASSES 4
+#define SW_NUM_CLASSES 5
 
 /* Hedef sınıflar (background hariç): tank, armored, drone */
 #define SW_TARGET_BG 3

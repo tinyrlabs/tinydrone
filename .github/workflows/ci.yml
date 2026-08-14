@@ -37,10 +37,28 @@ jobs:
           ./build/tests/test_pool2d
           ./build/tests/test_cnn
 
+      - name: Host tests (tracking mode + int8 accuracy)
+        run: |
+          make -C deps/tinycml static
+          make test-host
+
       - name: Verify dataset pipeline syntax
         run: |
-          python3 -m py_compile training/train_cnn.py
           python3 -m py_compile training/categorize_final.py
+          python3 -m py_compile training/add_tank_data.py
+
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: ESP-IDF build (esp32, int8 + SIMD)
+        uses: espressif/idf-action@v1
+        with:
+          esp_idf_version: v5.3.2
+          target: esp32
+          path: firmware
+          command: idf.py build
 
   dataset-check:
     runs-on: ubuntu-latest

@@ -31,7 +31,7 @@
 #define IMG_H 32
 #define IMG_W 32
 #define IMG_C 3
-#define N_CLASSES 4
+#define N_CLASSES 5
 #define NCHW (IMG_C * IMG_H * IMG_W)
 
 /* ---------- Katman yapıları ---------- */

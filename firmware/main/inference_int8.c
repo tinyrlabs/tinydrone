@@ -205,23 +205,23 @@ int inference_int8_run(const double *input_fp, double *probs) {
     relu_i8(fc1o, 64, (int8_t)a_zero_fc1);
 
     /* FC2 → float logit */
-    float logits[4];
-    fc_i8(fc1o, 64, fc2_w_i8, fc2_w_scale, 4, fc2_b, a_scale_fc1, logits);
+    float logits[SW_NUM_CLASSES];
+    fc_i8(fc1o, 64, fc2_w_i8, fc2_w_scale, SW_NUM_CLASSES, fc2_b, a_scale_fc1, logits);
 
     /* Softmax */
     double mx = -1e308;
-    for (int c = 0; c < 4; c++) if (logits[c] > mx) mx = logits[c];
+    for (int c = 0; c < SW_NUM_CLASSES; c++) if (logits[c] > mx) mx = logits[c];
     double sum = 0.0;
-    for (int c = 0; c < 4; c++) {
+    for (int c = 0; c < SW_NUM_CLASSES; c++) {
         logits[c] = (float)exp((double)logits[c] - mx);
         sum += logits[c];
     }
-    for (int c = 0; c < 4; c++) logits[c] = (float)(logits[c] / sum);
+    for (int c = 0; c < SW_NUM_CLASSES; c++) logits[c] = (float)(logits[c] / sum);
 
     int best = 0;
-    for (int c = 1; c < 4; c++) if (logits[c] > logits[best]) best = c;
+    for (int c = 1; c < SW_NUM_CLASSES; c++) if (logits[c] > logits[best]) best = c;
     if (probs) {
-        for (int c = 0; c < 4; c++) probs[c] = logits[c];
+        for (int c = 0; c < SW_NUM_CLASSES; c++) probs[c] = logits[c];
     }
     return best;
 }
