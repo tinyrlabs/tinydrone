@@ -300,13 +300,18 @@ def yaw_to_target(tid):
 
 
 # ---------- Otomatik takip (hareketli hedefi görüşte tut) ----------
-TRACK_TARGET = {"id": "armored"}  # takip edilen hedef (butonla değişir)
+# enabled=False → manuel komut (target/yaw_to) takibi duraklatır
+TRACK_TARGET = {"id": "armored", "enabled": True}
 
 
 def track_loop():
-    """1 Hz: takip hedefi görüş merkezinden sapınca yaw'ı düzelt."""
+    """1 Hz: takip hedefi görüş merkezinden sapınca yaw'ı düzelt.
+    Manuel komutlar (HANGARA DÖN vb.) takibi duraklatır — çakışma yok."""
     while True:
         try:
+            if not TRACK_TARGET["enabled"]:
+                time.sleep(1.0)
+                continue
             with STATE_LOCK:
                 yaw = STATE["drone_yaw"]
                 dx, dy = STATE["drone_x"], STATE["drone_y"]
@@ -751,19 +756,23 @@ class Handler(BaseHTTPRequestHandler):
             msg = "İNİŞ"
         elif act == "yaw_to":
             r = do_yaw_to(float(val))
+            TRACK_TARGET["enabled"] = False  # manuel dönüş → takip duraklar
             msg = f"YAW {val}°"
         elif act == "target":
             r = yaw_to_target(val)
+            TRACK_TARGET["enabled"] = False  # manuel hedef → takip duraklar
             msg = f"HEDEFE DÖN: {val}"
         elif act == "demo":
+            TRACK_TARGET["enabled"] = True
             threading.Thread(target=auto_demo_loop, daemon=True).start()
             r = 0
             msg = "OTOMATİK DEMO BAŞLATILDI"
         elif act == "track":
             if val in ("armored", "tank", "hangar"):
                 TRACK_TARGET["id"] = val
+                TRACK_TARGET["enabled"] = True  # otonom takibi aç
                 r = 0
-                msg = f"TAKİP HEDEFİ: {val}"
+                msg = f"TAKİP HEDEFİ: {val} (otonom)"
             else:
                 r = -1
                 msg = f"bilinmeyen hedef: {val}"
@@ -798,6 +807,8 @@ class Handler(BaseHTTPRequestHandler):
             with WORLD_LOCK:
                 s["targets"] = {k: [round(v[0], 1), round(v[1], 1)]
                                 for k, v in TARGET_POS.items()}
+            s["track"] = {"id": TRACK_TARGET["id"],
+                          "enabled": TRACK_TARGET["enabled"]}
             body = json.dumps(s).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")

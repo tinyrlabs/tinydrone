@@ -110,6 +110,7 @@
 
   <div class="status-line">
     Uçuş: <span id="time">0.0</span> s · Konum: <span id="pos">-</span> · Roll/Pitch: <span id="att">0°/0°</span>
+    · Takip: <span id="trk">—</span>
   </div>
 
 <script>
@@ -217,6 +218,12 @@ async function tick() {
     $('att').textContent = s.roll.toFixed(0) + '° / ' + s.pitch.toFixed(0) + '°';
     $('time').textContent = s.time.toFixed(1);
     $('fps').textContent = (s.fps || 0).toFixed(1);
+    // Takip durumu
+    if (s.track) {
+      $('trk').textContent = s.track.enabled
+        ? ('OTONOM → ' + s.track.id) : 'MANUEL (takip kapalı)';
+      $('trk').style.color = s.track.enabled ? '#4ade80' : '#fbbf24';
+    }
     // Tespit satırı
     const d = s.det || {};
     const dl = $('detline');
