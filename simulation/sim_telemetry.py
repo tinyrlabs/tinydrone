@@ -48,8 +48,43 @@ TARGETS = [
     {"id": "hangar",     "x": -8.0, "y": 3.0, "size": 12.0,
      "cls": 4, "dir": "military_building"},
     {"id": "armored",    "x": 4.0,  "y": -5.0, "size": 2.2,
-     "cls": 1, "dir": "armored_vehicle"},
+     "cls": 1, "dir": "armored_vehicle",
+     # Devriye yolu (NED metre) — hareketli hedef senaryosu
+     "path": [(4.0, -5.0), (0.0, -7.0), (-4.0, -5.0), (0.0, -3.0)],
+     "speed": 1.5},  # m/s
 ]
+
+# Dinamik hedef pozisyonları (world_loop günceller)
+WORLD_LOCK = threading.Lock()
+TARGET_POS = {t["id"]: (t["x"], t["y"]) for t in TARGETS}
+
+
+def world_loop():
+    """Hareketli hedefler: armored devriye yolu üzerinde yürür."""
+    path = TARGET_POS and next((t for t in TARGETS if t["id"] == "armored"), None)
+    if not path or not path.get("path"):
+        return
+    pts = path["path"]
+    speed = path.get("speed", 1.5)
+    idx, seg_t = 0, 0.0
+    while True:
+        try:
+            a = pts[idx % len(pts)]
+            b = pts[(idx + 1) % len(pts)]
+            seg_len = math.hypot(b[0] - a[0], b[1] - a[1])
+            step = speed * 0.1 / max(seg_len, 0.01)
+            seg_t += step
+            if seg_t >= 1.0:
+                seg_t -= 1.0
+                idx += 1
+                continue
+            with WORLD_LOCK:
+                TARGET_POS["armored"] = (
+                    a[0] + (b[0] - a[0]) * seg_t,
+                    a[1] + (b[1] - a[1]) * seg_t)
+        except Exception:
+            pass
+        time.sleep(0.1)
 
 # Hedef görsellerini yükle (gerçek dataset görselleri)
 def _load_target_imgs():
@@ -235,14 +270,37 @@ def do_yaw_to(heading):
 
 
 def yaw_to_target(tid):
-    """Hedefin drone'a göre yaw'ı (NED: x=kuzey, y=doğu)."""
+    """Hedefin drone'a göre yaw'ı (NED: x=kuzey, y=doğu) — dinamik pozisyon."""
     with STATE_LOCK:
         dx, dy = STATE["drone_x"], STATE["drone_y"]
-    t = next((t for t in TARGETS if t["id"] == tid), None)
-    if not t:
+    with WORLD_LOCK:
+        pos = TARGET_POS.get(tid)
+    if not pos:
         return -1
-    yaw = (180 / 3.14159265) * np.arctan2(t["y"] - dy, t["x"] - dx)
+    yaw = (180 / 3.14159265) * np.arctan2(pos[1] - dy, pos[0] - dx)
     return do_yaw_to(int(round(yaw)) % 360)
+
+
+# ---------- Otomatik takip (hareketli hedefi görüşte tut) ----------
+def track_loop():
+    """1 Hz: hedef (armored) görüş merkezinden sapınca yaw'ı düzelt."""
+    while True:
+        try:
+            with STATE_LOCK:
+                yaw = STATE["drone_yaw"]
+                dx, dy = STATE["drone_x"], STATE["drone_y"]
+            with WORLD_LOCK:
+                pos = TARGET_POS.get("armored")
+            if not pos:
+                time.sleep(1.0)
+                continue
+            theta = math.degrees(math.atan2(pos[1] - dy, pos[0] - dx))
+            delta = (theta - yaw + 180) % 360 - 180
+            if abs(delta) > 12.0:  # görüşten sapınca hedefe dön
+                do_yaw_to(int(round(theta)) % 360)
+        except Exception:
+            pass
+        time.sleep(1.0)
 
 
 # ---------- Otomatik demo (panel açan canlı tespit görsün) ----------
@@ -404,15 +462,17 @@ def render_camera(dx, dy, yaw, alt=10.0):
                 if pa and pb:
                     draw.line([pa[:2], pb[:2]], fill=GRID_C, width=1)
 
-    # Hedefler: 3D kutular (z-sort ile)
+    # Hedefler: 3D kutular (z-sort ile) — dinamik pozisyonlar
     faces = []
     for t in TARGETS:
+        with WORLD_LOCK:
+            pos = TARGET_POS.get(t["id"], (t["x"], t["y"]))
         h = 1.6 if t["id"] == "armored" else (4.5 if t["id"] == "hangar" else 2.2)
-        _draw_box(draw, t["x"], t["y"], t["size"], t["size"] * 0.7, h,
+        _draw_box(draw, pos[0], pos[1], t["size"], t["size"] * 0.7, h,
                   TARGET_COLORS[t["id"]], cam, yaw_r, pitch_r, faces)
         # Taret (tank)
         if t["id"] == "tank":
-            _draw_box(draw, t["x"], t["y"], t["size"] * 0.4, t["size"] * 0.4,
+            _draw_box(draw, pos[0], pos[1], t["size"] * 0.4, t["size"] * 0.4,
                       3.0, (70, 82, 48), cam, yaw_r, pitch_r, faces)
     faces.sort(key=lambda f: -f[0])  # uzaktan yakına
     for _, pts, col in faces:
@@ -421,8 +481,11 @@ def render_camera(dx, dy, yaw, alt=10.0):
     # Görüşteki hedefler → bbox (kutu köşelerinin ekran kapsamı, FOV sınırlı)
     visible = []
     for t in TARGETS:
+        with WORLD_LOCK:
+            pos = TARGET_POS.get(t["id"], (t["x"], t["y"]))
+        tx, ty = pos
         # Görüş açısı kontrolü (FOV yarı genişliği + tolerans)
-        theta = math.degrees(math.atan2(t["y"] - dy, t["x"] - dx))
+        theta = math.degrees(math.atan2(ty - dy, tx - dx))
         delta = (theta - yaw + 180) % 360 - 180
         if abs(delta) > FOV_DEG / 2 + 8:
             continue
@@ -627,6 +690,9 @@ class Handler(BaseHTTPRequestHandler):
             with STATE_LOCK:
                 s = {k: v for k, v in STATE.items() if k != "cam_jpeg"}
                 s["cmd_log"] = list(CMD_LOG)
+            with WORLD_LOCK:
+                s["targets"] = {k: [round(v[0], 1), round(v[1], 1)]
+                                for k, v in TARGET_POS.items()}
             body = json.dumps(s).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -661,6 +727,10 @@ def main():
 
     threading.Thread(target=mavlink_loop, daemon=True).start()
     threading.Thread(target=cnn_loop, daemon=True).start()
+    threading.Thread(target=world_loop, daemon=True).start()
+
+    # Otomatik takip: hareketli hedefi görüşte tut
+    threading.Thread(target=track_loop, daemon=True).start()
 
     # Otomatik demo: kalkış → zırhlıya dönüş → canlı tespit
     threading.Thread(target=auto_demo_loop, daemon=True).start()

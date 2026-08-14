@@ -120,8 +120,9 @@ function drawScene(s) {
   for (let i = 0; i <= 400; i += 32) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(640, i); ctx.stroke(); }
   // Ölçek: 1m = 16px, merkez = drone
   const scale = 16, ox = 320, oy = 200;
-  // Hedefler
-  (s.targets || []).forEach(t => {
+  // Hedefler (dinamik pozisyonlar — hareketli hedef canlı izlenir)
+  const tgts = Object.entries(s.targets || {}).map(([id, xy]) => ({id, x: xy[0], y: xy[1]}));
+  tgts.forEach(t => {
     const x = ox + t.x * scale, y = oy - t.y * scale;
     ctx.fillStyle = '#b91c1c';
     ctx.fillRect(x - 6, y - 6, 12, 12);
