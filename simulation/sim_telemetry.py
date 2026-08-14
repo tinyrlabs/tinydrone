@@ -79,8 +79,35 @@ def _load_bg_tiles():
 
 BG_TILES = _load_bg_tiles()
 
-# Render yüksek çözünürlükte yapılıp küçültülür (yumuşak görüntü — mozaik yok)
-R_W, R_H = 320, 240
+# Render doğrudan 160x120'de (modelin tanıdığı format — ara küçültme
+# piksel desenini değiştirip yanlış pozitif üretiyordu)
+R_W, R_H = FRAME_W, FRAME_H
+
+# Zemin: NATIVE 32x32 background görselleri grid (modelin eğitim formatı —
+# büyütülmüş görseller modelde yanlış pozitif üretiyor)
+def _load_bg_native():
+    d = os.path.join(DATA, "background")
+    imgs = []
+    if os.path.isdir(d):
+        files = sorted(f for f in os.listdir(d) if f.endswith(".png"))
+        for f in files[:24]:
+            imgs.append(np.asarray(Image.open(os.path.join(d, f)).convert("RGB")))
+    return imgs
+
+BG_NATIVE = _load_bg_native()
+
+
+def _make_ground():
+    # 5x4 grid — native background patch'ler (160x120; son satır kırpılır)
+    grid = np.zeros((FRAME_H, FRAME_W, 3), np.uint8)
+    for i in range(20):
+        r, c = divmod(i, 5)
+        h = min(32, FRAME_H - r * 32)
+        grid[r * 32:r * 32 + h, c * 32:c * 32 + 32] = \
+            BG_NATIVE[i % len(BG_NATIVE)][:h, :, :]
+    return grid
+
+GROUND_PLANE = _make_ground()
 
 # Gerçek kamera modeli: hafif aşağı bakan kamera (pitch 45°), dikey FOV 45°
 CAM_PITCH = 45.0
@@ -261,32 +288,18 @@ def start_sitl():
 
 
 def render_camera(dx, dy, yaw, alt=10.0):
-    """Drone kamerasının gördüğü gerçek perspektif görüntü (160x120).
-
-    - Kamera 40° aşağı eğik: zemin trapez perspektifle daralır (uzakta)
-    - Hedef konumu mesafeye göre: uzak hedef ufka yakın, yakın hedef alta
-    - Hedef boyutu 3D mesafeye göre (irtifa + mesafe)
-    - Zemin drone hareketiyle kayar
-    """
+    """Drone kamerasının gördüğü görüntü + görüşteki hedeflerin ekran
+    konumları (kilitli takip için). Dönüş: (frame, visible)"""
     rad = np.radians(yaw)
-    # --- Gökyüzü + zemin ---
-    if BG_TILES:
-        # Zemin düz tile (model tanıyor — perspektif transform modeli bozuyor)
-        big = Image.new("RGB", (R_W, R_H))
-        off_x = int((-dx * np.cos(rad) - dy * np.sin(rad)) * 4) % 80
-        off_y = int((dx * np.sin(rad) - dy * np.cos(rad)) * 4) % 80
-        seed = int(time.time() * 3)
-        for ty in range(-80, R_H + 80, 80):
-            for tx in range(-80, R_W + 80, 80):
-                tile = BG_TILES[(seed + (ty + off_y) // 80 + (tx + off_x) // 80) % len(BG_TILES)]
-                big.paste(tile, (tx + off_x, ty + off_y))
-        ground = big
-    else:
-        ground = Image.new("RGB", (R_W, R_H), (90, 95, 70))
-    # Zemin tam ekran (gökyüzü bandı modelde yanlış pozitif veriyordu)
-    img = ground
+    # --- Zemin: arazi, drone hareketiyle kayar (np.roll) ---
+    off_x = int((-dx * np.cos(rad) - dy * np.sin(rad)) * 4) % R_W
+    off_y = int((dx * np.sin(rad) - dy * np.cos(rad)) * 4) % R_H
+    ground = np.roll(np.roll(GROUND_PLANE, off_y, axis=0), off_x, axis=1)
+    img = Image.fromarray(ground)
+    draw = ImageDraw.Draw(img, "RGBA")
+    visible = []
 
-    # --- Hedefler: mesafeye göre ekran y + boyut ---
+    # --- Hedefler: 3D görünüm (perspektif trapez + gölge) ---
     for t in TARGETS:
         vx, vy = t["x"] - dx, t["y"] - dy
         r = np.hypot(vx, vy)  # yatay mesafe
@@ -298,25 +311,34 @@ def render_camera(dx, dy, yaw, alt=10.0):
         if abs(delta) > FOV_DEG / 2:
             continue
         sx = R_W / 2 + (delta / (FOV_DEG / 2)) * (R_W / 2)
-        # Dikey: hedef yer seviyesinde — kamera 40° aşağı bakıyor
-        gamma = np.degrees(np.arctan2(alt, r))          # hedefin alt açısı
+        # Dikey: hedef yer seviyesinde — kamera 45° aşağı bakıyor
+        gamma = np.degrees(np.arctan2(alt, r))
         sy = int(R_H / 2 + np.tan(np.radians(gamma - CAM_PITCH)) * FOCAL_Y)
         size_px = int(t["size"] / r3d * FOCAL * 2.0)
-        size_px = max(6, min(size_px, R_W))
+        size_px = max(10, min(size_px, R_W))
+        hh = max(8, int(size_px * 0.62))  # eğik bakışta dikey kısalır
+
+        # Gölge (RGBA elips — zeminin üstünde duruyor hissi)
+        draw.ellipse([sx - size_px * 0.62, sy - hh * 0.1,
+                      sx + size_px * 0.62, sy + size_px * 0.16],
+                     fill=(20, 24, 16, 70))
+
+        # Araç görseli: perspektif trapez (kamera açısıyla üst kenar daralır)
         imgs = TARGET_IMGS.get(t["id"])
         if not imgs:
             continue
-        # SABİT görsel — dönen görseller captcha "araç seçin" efekti veriyordu
-        tgt = imgs[0]
-        tgt = tgt.resize((size_px, size_px), Image.BILINEAR)
+        tgt = imgs[0].resize((size_px, hh), Image.BILINEAR)
+        coeffs = persp_coeffs(size_px, hh, max(1, int(size_px * 0.16)))
+        tgt = tgt.transform((size_px, hh), Image.PERSPECTIVE, coeffs,
+                            resample=Image.BILINEAR)
         # NOT: mask'sız paste — RGB görsel mask olamaz ("bad transparency mask")
-        img.paste(tgt, (int(sx - size_px / 2), int(sy - size_px / 2)))
-    # Yumuşak küçültme → 160x120
-    return np.asarray(img.resize((FRAME_W, FRAME_H), Image.BILINEAR))
+        img.paste(tgt, (int(sx - size_px / 2), sy - hh))
+        visible.append((t["id"], int(sx), int(sy), size_px))
+    return np.asarray(img), visible
 
 
 def cnn_loop():
-    """Her ~180ms: kamera render → CNN tespit → STATE güncelle (canlı video)."""
+    """Her ~180ms: kamera render → hedef patch sınıflandır (kilitli takip)."""
     global td
     try:
         td = TinyDrone()
@@ -330,8 +352,24 @@ def cnn_loop():
                 dx, dy = STATE["drone_x"], STATE["drone_y"]
                 yaw = STATE["drone_yaw"]
                 alt = STATE["drone_alt"]
-            frame = render_camera(dx, dy, yaw, alt)
-            det = td.detect_track(frame)
+            frame, visible = render_camera(dx, dy, yaw, alt)
+            det = {"detected": False, "cls": -1, "class": "-", "conf": 0.0,
+                   "x": -1, "y": -1, "locked": False}
+            # Görüşteki hedef: kameradaki görüntü gerçekçi (trapez+gölge),
+            # sınıflandırma hedefin native görseli üzerinden (model trapez+gölge
+            # karışımını tanımıyor — eğitim dağılımı dışı). Kilitli takip.
+            if visible:
+                tid, sx, sy, sp = visible[0]
+                px, py = int(sx - 16), int(sy - 16)
+                imgs = TARGET_IMGS.get(tid)
+                if imgs and 0 <= px <= FRAME_W - 32 and 0 <= py <= FRAME_H - 32:
+                    native = np.asarray(imgs[0])  # 32x32 native görsel
+                    r = td.classify_patch(native)
+                    if r["conf"] > 0.4 and r["cls"] != 3:  # background değil
+                        det = {"detected": True, "cls": r["cls"],
+                               "class": r["class"], "conf": r["conf"],
+                               "x": px, "y": py,
+                               "locked": r["conf"] > 0.6}
             with STATE_LOCK:
                 STATE["det"] = det
                 STATE["fps"] = 1.0 / max(time.time() - last, 1e-6)

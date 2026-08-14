@@ -58,3 +58,18 @@ void td_track_state(int *locked, int *lost, int *last_x, int *last_y, int *last_
     if (last_y) *last_y = g_trk.last_y;
     if (last_cls) *last_cls = g_trk.last_cls;
 }
+
+/* Tek 32x32 patch sınıflandırma (kilitli takip). uint8 RGB interleaved →
+ * CHW plan formatı, [-1,1] normalize (inference_int8_run giriş formatı:
+ * patch[c*1024 + y*32 + x] = px / 127.5 - 1.0). */
+int td_classify(const uint8_t *patch32, double *probs) {
+    if (!g_inited || !patch32 || !probs)
+        return -1;
+    static double p[32 * 32 * 3];
+    for (int c = 0; c < 3; c++)
+        for (int y = 0; y < 32; y++)
+            for (int x = 0; x < 32; x++)
+                p[c * 1024 + y * 32 + x] =
+                    (double)patch32[(y * 32 + x) * 3 + c] / 127.5 - 1.0;
+    return inference_int8_run(p, probs);
+}

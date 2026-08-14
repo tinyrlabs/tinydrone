@@ -33,6 +33,12 @@ class TinyDrone:
             ctypes.POINTER(ctypes.c_int), ctypes.POINTER(ctypes.c_double),
             ctypes.POINTER(ctypes.c_int),
         ]
+        # td_classify(patch32, probs) -> int (tek patch sınıflandırma)
+        self.lib.td_classify.restype = ctypes.c_int
+        self.lib.td_classify.argtypes = [
+            ctypes.POINTER(ctypes.c_uint8),
+            ctypes.POINTER(ctypes.c_double),
+        ]
         self.lib.td_init.restype = None
         self.lib.td_init.argtypes = []
         self.lib.td_track_state.restype = None
@@ -61,6 +67,18 @@ class TinyDrone:
             "conf": conf.value,
             "locked": bool(locked.value),
         }
+
+    def classify_patch(self, patch32):
+        """32x32x3 uint8 patch → (cls, conf, probs). Kilitli takip için."""
+        p = np.ascontiguousarray(patch32, dtype=np.uint8)
+        assert p.shape == (32, 32, 3), p.shape
+        ptr = p.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8))
+        probs = (ctypes.c_double * 5)()
+        cls = self.lib.td_classify(ptr, probs)
+        conf = max(probs) if cls >= 0 else 0.0
+        return {"cls": cls, "conf": conf,
+                "class": CLASS_NAMES[cls] if 0 <= cls < len(CLASS_NAMES) else "?",
+                "probs": list(probs)}
 
     def track_state(self):
         locked, lost, lx, ly, lcls = (ctypes.c_int() for _ in range(5))
