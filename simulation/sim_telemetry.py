@@ -64,12 +64,25 @@ def _load_target_imgs():
 
 TARGET_IMGS = _load_target_imgs()
 
+# Zemin dokusu — gerçek background görselleri (model background'ı tanır)
+def _load_bg_tiles():
+    d = os.path.join(DATA, "background")
+    tiles = []
+    if os.path.isdir(d):
+        files = sorted(f for f in os.listdir(d) if f.endswith(".png"))
+        for f in files[:24]:
+            img = Image.open(os.path.join(d, f)).convert("RGB")
+            tiles.append(img.resize((40, 40), Image.BILINEAR))
+    return tiles
+
+BG_TILES = _load_bg_tiles()
+
 # ---------- Canlı durum (thread'ler arası paylaşım) ----------
 STATE = {
     "connected": False, "armed": False, "mode": "-",
     "alt": 0.0, "yaw": 0.0, "speed": 0.0,
     "gps_fix": 0, "sats": 0, "volt": 0.0,
-    "roll": 0.0, "pitch": 0.0, "time": 0.0,
+    "roll": 0.0, "pitch": 0.0, "att_yaw": 0.0, "time": 0.0,
     "lat": 0.0, "lon": 0.0,
     # Sanal dünya
     "drone_x": 0.0, "drone_y": 0.0, "drone_yaw": 0.0, "drone_alt": 0.0,
@@ -85,6 +98,97 @@ STATE_LOCK = threading.Lock()
 # ---------- CNN ----------
 td = None
 
+# MAVLink kontrol (buton komutları için global referans)
+MAV = None
+MAV_LOCK = threading.Lock()
+CMD_LOG = []  # son komutlar
+
+
+def send_cmd(cmd_id, *params):
+    """MAVLink komutu gönder (thread-safe)."""
+    with MAV_LOCK:
+        if MAV is None or not MAV.target_system:
+            return -1
+        MAV.mav.command_long_send(
+            MAV.target_system, MAV.target_component, cmd_id, 0, *params)
+    return 0
+
+
+def do_takeoff(alt=10.0):
+    """EKF pozisyon bekle (STATE poll) → GUIDED → arm (retry) → takeoff."""
+    # Not: recv_match KULLANILMAZ — mavlink_loop aynı bağlantıdan okuyor,
+    # mesajlar yarışır. Sonuçlar STATE'ten poll edilir.
+    with MAV_LOCK:
+        if MAV is None:
+            return -1
+        MAV.set_mode_apm("GUIDED")
+    time.sleep(2)
+
+    # EKF pozisyon bekle (LOCAL_POSITION_NED alınıyor — STATE["time"] > 5)
+    t0 = time.time()
+    while time.time() - t0 < 90:
+        with STATE_LOCK:
+            pos_ok = STATE["time"] > 5 and (STATE["gps_fix"] >= 3)
+        if pos_ok:
+            break
+        time.sleep(1)
+
+    # Arm (STATE poll — armed True olana kadar, max 45 sn)
+    armed = False
+    with MAV_LOCK:
+        if MAV is None:
+            return -1
+        for _ in range(9):
+            MAV.arducopter_arm()
+            t0 = time.time()
+            while time.time() - t0 < 5:
+                with STATE_LOCK:
+                    armed = STATE["armed"]
+                if armed:
+                    break
+                time.sleep(0.5)
+            if armed:
+                break
+            time.sleep(3)
+
+    if not armed:
+        print("[CMD] arm başarısız (EKF pozisyon yok olabilir)")
+        return -1
+
+    # Takeoff
+    r = send_cmd(mavutil.mavlink.MAV_CMD_NAV_TAKEOFF, 0, 0, 0, 0, 0, 0, alt)
+    print(f"[CMD] takeoff gönderildi (r={r})")
+    return r
+
+
+def do_land():
+    return send_cmd(mavutil.mavlink.MAV_CMD_NAV_LAND, 0, 0, 0, 0, 0, 0, 0)
+
+
+def do_yaw_to(heading):
+    """CONDITION_YAW — drone'u hedefe döndür (GUIDED mod gerekir)."""
+    with MAV_LOCK:
+        if MAV is None:
+            return -1
+        try:
+            MAV.set_mode_apm("GUIDED")
+        except Exception:
+            pass
+    time.sleep(1)
+    return send_cmd(mavutil.mavlink.MAV_CMD_CONDITION_YAW,
+                    float(heading), 25.0, 1, 0, 0, 0, 0)
+
+
+def yaw_to_target(tid):
+    """Hedefin drone'a göre yaw'ı (NED: x=kuzey, y=doğu)."""
+    with STATE_LOCK:
+        dx, dy = STATE["drone_x"], STATE["drone_y"]
+    t = next((t for t in TARGETS if t["id"] == tid), None)
+    if not t:
+        return -1
+    yaw = (180 / 3.14159265) * np.arctan2(t["y"] - dy, t["x"] - dx)
+    return do_yaw_to(int(round(yaw)) % 360)
+
 
 def start_sitl():
     proc = subprocess.Popen(
@@ -96,13 +200,21 @@ def start_sitl():
 
 def render_camera(dx, dy, yaw):
     """Drone (dx,dy) NED + yaw (derece) → 160x120 kamera görüntüsü (numpy RGB).
-    Hedefler görüş açısındaysa gerçek dataset görseliyle çizilir."""
-    frame = np.full((FRAME_H, FRAME_W, 3), 96, dtype=np.uint8)
-    # Zemin degrade (koyu yeşil-kahve)
-    for y in range(FRAME_H):
-        v = int(70 + 40 * (y / FRAME_H))
-        frame[y, :] = (v - 10, v, v - 25)
-    img = Image.fromarray(frame)
+    Zemin: gerçek background görselleri tile (model tanır). Hedefler görüş
+    açısındaysa gerçek dataset görseliyle çizilir."""
+    if BG_TILES:
+        img = Image.new("RGB", (FRAME_W, FRAME_H))
+        seed = int(time.time() * 2)
+        for ty in range(0, FRAME_H, 40):
+            for tx in range(0, FRAME_W, 40):
+                tile = BG_TILES[(seed + ty // 40 + tx // 40) % len(BG_TILES)]
+                img.paste(tile, (tx, ty))
+    else:
+        frame = np.full((FRAME_H, FRAME_W, 3), 96, dtype=np.uint8)
+        for y in range(FRAME_H):
+            v = int(70 + 40 * (y / FRAME_H))
+            frame[y, :] = (v - 10, v, v - 25)
+        img = Image.fromarray(frame)
 
     for t in TARGETS:
         # Hedefe vektör (drone'dan)
@@ -126,7 +238,8 @@ def render_camera(dx, dy, yaw):
         tgt = tgt.resize((size_px, size_px), Image.BILINEAR)
         # Ekran y: hedef yerde — kamera aşağı bakar, merkez-alt bölge
         sy = int(FRAME_H * 0.55)
-        img.paste(tgt, (int(sx - size_px / 2), sy), tgt)
+        # NOT: mask'sız paste — RGB görsel mask olamaz ("bad transparency mask")
+        img.paste(tgt, (int(sx - size_px / 2), sy))
     return np.asarray(img)
 
 
@@ -173,6 +286,7 @@ def _frame_to_jpeg(frame, det):
 
 def mavlink_loop():
     """MAVLink mesajlarını oku, STATE'i güncelle."""
+    global MAV
     mav = None
     while True:
         try:
@@ -183,6 +297,8 @@ def mavlink_loop():
                     mav = None
                     time.sleep(2)
                     continue
+                with MAV_LOCK:
+                    MAV = mav
                 for mid in (24, 30, 32, 74, 193):
                     mav.mav.command_long_send(
                         mav.target_system, mav.target_component,
@@ -203,6 +319,7 @@ def mavlink_loop():
                     STATE["alt"] = msg.alt
                     STATE["speed"] = msg.groundspeed
                     STATE["yaw"] = msg.heading
+                    STATE["drone_yaw"] = msg.heading
                     STATE["volt"] = getattr(msg, "bat_volt", 0.0)
                 elif t == "GPS_RAW_INT":
                     STATE["gps_fix"] = msg.fix_type
@@ -212,11 +329,16 @@ def mavlink_loop():
                 elif t == "ATTITUDE":
                     STATE["roll"] = msg.roll * 57.2958
                     STATE["pitch"] = msg.pitch * 57.2958
+                    STATE["att_yaw"] = msg.yaw * 57.2958
                 elif t == "LOCAL_POSITION_NED":
                     STATE["time"] = msg.time_boot_ms / 1000.0
                     STATE["drone_x"] = msg.x   # kuzey (m)
                     STATE["drone_y"] = msg.y   # doğu (m)
                     STATE["drone_alt"] = -msg.z
+                elif t == "COMMAND_ACK":
+                    STATE["last_ack"] = f"{msg.command}:{msg.result}"
+                elif t == "STATUSTEXT":
+                    STATE["last_status"] = msg.text
         except Exception:
             with STATE_LOCK:
                 STATE["connected"] = False
@@ -227,6 +349,45 @@ def mavlink_loop():
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
+
+    def do_POST(self):
+        """Kontrol komutları: /cmd?act=takeoff|land|yaw_to|target&val=X"""
+        import urllib.parse
+        from urllib.parse import urlparse, parse_qs
+        u = urlparse(self.path)
+        if u.path != "/cmd":
+            self.send_response(404)
+            self.end_headers()
+            return
+        q = parse_qs(u.query)
+        act = q.get("act", [""])[0]
+        val = q.get("val", [""])[0]
+        if act == "takeoff":
+            r = do_takeoff(float(val) if val else 10.0)
+            msg = f"KALK {val or 10}m"
+        elif act == "land":
+            r = do_land()
+            msg = "İNİŞ"
+        elif act == "yaw_to":
+            r = do_yaw_to(float(val))
+            msg = f"YAW {val}°"
+        elif act == "target":
+            r = yaw_to_target(val)
+            msg = f"HEDEFE DÖN: {val}"
+        else:
+            self.send_response(400)
+            self.end_headers()
+            return
+        with STATE_LOCK:
+            CMD_LOG.append({"t": time.strftime("%H:%M:%S"), "msg": msg,
+                            "r": r})
+            CMD_LOG[:] = CMD_LOG[-5:]
+        body = json.dumps({"ok": r == 0, "msg": msg}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_GET(self):
         if self.path in ("/", "/index.html"):
@@ -239,6 +400,7 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path == "/status":
             with STATE_LOCK:
                 s = {k: v for k, v in STATE.items() if k != "cam_jpeg"}
+                s["cmd_log"] = list(CMD_LOG)
             body = json.dumps(s).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
