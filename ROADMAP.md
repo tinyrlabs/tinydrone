@@ -152,3 +152,5 @@
 | 12.08.2026 | 4.5 | int8 quantization: %85.93 (float uyum %99.62), 0.41MB |
 | 12.08.2026 | 4.5 | Sliding window: coarse-to-fine, bbox + servo offset |
 | 12.08.2026 | 2 | Tank +1079 görsel: %69→%79, armored %72→%87, genel %89.54 |
+| 14.08.2026 | 2 | 5. sınıf military_building (xView 1887 görsel): genel **%90.64** |
+| 14.08.2026 | 4.6 | Takip modu (1 inf/kare, 30-60 FPS) + UART + ESP-DSP + watchdog |
