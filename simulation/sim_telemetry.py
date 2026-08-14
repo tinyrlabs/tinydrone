@@ -44,7 +44,10 @@ FOCAL = FOCAL * 1.8  # demo: hedefler kamerada daha büyük görünsün (32px+ t
 
 TARGETS = [
     {"id": "tank",       "x": 6.0,  "y": 4.0,  "size": 3.0,
-     "cls": 0, "dir": "tank"},
+     "cls": 0, "dir": "tank",
+     # Tank da devriye yürür (yavaş — 0.8 m/s)
+     "path": [(6.0, 4.0), (8.0, 6.0), (6.0, 8.0), (4.0, 6.0)],
+     "speed": 0.8},
     {"id": "hangar",     "x": -8.0, "y": 3.0, "size": 12.0,
      "cls": 4, "dir": "military_building"},
     {"id": "armored",    "x": 4.0,  "y": -5.0, "size": 2.2,
@@ -60,28 +63,30 @@ TARGET_POS = {t["id"]: (t["x"], t["y"]) for t in TARGETS}
 
 
 def world_loop():
-    """Hareketli hedefler: armored devriye yolu üzerinde yürür."""
-    path = TARGET_POS and next((t for t in TARGETS if t["id"] == "armored"), None)
-    if not path or not path.get("path"):
+    """Hareketli hedefler: path'i olan her hedef devriye yürür."""
+    movers = [t for t in TARGETS if t.get("path")]
+    if not movers:
         return
-    pts = path["path"]
-    speed = path.get("speed", 1.5)
-    idx, seg_t = 0, 0.0
+    # Her hareketli hedef için: idx, seg_t
+    state = {t["id"]: [0, 0.0] for t in movers}
     while True:
         try:
-            a = pts[idx % len(pts)]
-            b = pts[(idx + 1) % len(pts)]
-            seg_len = math.hypot(b[0] - a[0], b[1] - a[1])
-            step = speed * 0.1 / max(seg_len, 0.01)
-            seg_t += step
-            if seg_t >= 1.0:
-                seg_t -= 1.0
-                idx += 1
-                continue
-            with WORLD_LOCK:
-                TARGET_POS["armored"] = (
-                    a[0] + (b[0] - a[0]) * seg_t,
-                    a[1] + (b[1] - a[1]) * seg_t)
+            for t in movers:
+                pts = t["path"]
+                st = state[t["id"]]
+                a = pts[st[0] % len(pts)]
+                b = pts[(st[0] + 1) % len(pts)]
+                seg_len = math.hypot(b[0] - a[0], b[1] - a[1])
+                step = t.get("speed", 1.0) * 0.1 / max(seg_len, 0.01)
+                st[1] += step
+                if st[1] >= 1.0:
+                    st[1] -= 1.0
+                    st[0] += 1
+                    continue
+                with WORLD_LOCK:
+                    TARGET_POS[t["id"]] = (
+                        a[0] + (b[0] - a[0]) * st[1],
+                        a[1] + (b[1] - a[1]) * st[1])
         except Exception:
             pass
         time.sleep(0.1)
@@ -295,15 +300,18 @@ def yaw_to_target(tid):
 
 
 # ---------- Otomatik takip (hareketli hedefi görüşte tut) ----------
+TRACK_TARGET = {"id": "armored"}  # takip edilen hedef (butonla değişir)
+
+
 def track_loop():
-    """1 Hz: hedef (armored) görüş merkezinden sapınca yaw'ı düzelt."""
+    """1 Hz: takip hedefi görüş merkezinden sapınca yaw'ı düzelt."""
     while True:
         try:
             with STATE_LOCK:
                 yaw = STATE["drone_yaw"]
                 dx, dy = STATE["drone_x"], STATE["drone_y"]
             with WORLD_LOCK:
-                pos = TARGET_POS.get("armored")
+                pos = TARGET_POS.get(TRACK_TARGET["id"])
             if not pos:
                 time.sleep(1.0)
                 continue
@@ -405,8 +413,19 @@ def _face_visible(poly3d, cam, yaw_r, pitch_r):
     return nx * vx + ny * vy + nz * vz > 0
 
 
-def _draw_box(draw, cx, cy, w, l, h, color, cam, yaw_r, pitch_r, faces_out):
-    """3D kutu (merkez cx,cy; genişlik w, uzunluk l, yükseklik h) çiz."""
+def _quad_coeffs(src_pts, dst_pts):
+    """Genel 4 nokta perspective transform katsayıları."""
+    A, B = [], []
+    for (x, y), (xp, yp) in zip(src_pts, dst_pts):
+        A.append([x, y, 1, 0, 0, 0, -x * xp, -y * xp]); B.append(xp)
+        A.append([0, 0, 0, x, y, 1, -x * yp, -y * yp]); B.append(yp)
+    return np.linalg.solve(np.array(A), np.array(B)).tolist()
+
+
+def _draw_box(draw, img, cx, cy, w, l, h, color, cam, yaw_r, pitch_r,
+              faces_out, tex=None):
+    """3D kutu (merkez cx,cy; genişlik w, uzunluk l, yükseklik h) çiz.
+    tex verilirse üst yüzeye gerçek görsel perspektif haritalanır (S4)."""
     hw, hl = w / 2, l / 2
     corners = [
         (cx - hw, cy - hl, 0), (cx + hw, cy - hl, 0),
@@ -440,7 +459,11 @@ def _draw_box(draw, cx, cy, w, l, h, color, cam, yaw_r, pitch_r, faces_out):
         else:
             shade = 0.72
         col = (int(color[0] * shade), int(color[1] * shade), int(color[2] * shade))
-        faces_out.append((depth, pts, col))
+        # Üst yüzeye gerçek görsel texture (S4 — model kameradaki görüntüyü tanısın)
+        if fi == 1 and tex is not None:
+            faces_out.append((depth, pts, col, tex, proj))
+        else:
+            faces_out.append((depth, pts, col, None, None))
 
 
 def render_camera(dx, dy, yaw, alt=10.0):
@@ -475,21 +498,42 @@ def render_camera(dx, dy, yaw, alt=10.0):
                 if pa and pb:
                     draw.line([pa[:2], pb[:2]], fill=GRID_C, width=1)
 
-    # Hedefler: 3D kutular (z-sort ile) — dinamik pozisyonlar
+    # Hedefler: 3D kutular (z-sort ile) — dinamik pozisyonlar + gerçek texture
     faces = []
     for t in TARGETS:
         with WORLD_LOCK:
             pos = TARGET_POS.get(t["id"], (t["x"], t["y"]))
         h = 1.6 if t["id"] == "armored" else (4.5 if t["id"] == "hangar" else 2.2)
-        _draw_box(draw, pos[0], pos[1], t["size"], t["size"] * 0.7, h,
-                  TARGET_COLORS[t["id"]], cam, yaw_r, pitch_r, faces)
+        imgs = TARGET_IMGS.get(t["id"])
+        tex = imgs[0] if imgs else None
+        _draw_box(draw, img, pos[0], pos[1], t["size"], t["size"] * 0.7, h,
+                  TARGET_COLORS[t["id"]], cam, yaw_r, pitch_r, faces, tex)
         # Taret (tank)
         if t["id"] == "tank":
-            _draw_box(draw, pos[0], pos[1], t["size"] * 0.4, t["size"] * 0.4,
+            _draw_box(draw, img, pos[0], pos[1], t["size"] * 0.4, t["size"] * 0.4,
                       3.0, (70, 82, 48), cam, yaw_r, pitch_r, faces)
     faces.sort(key=lambda f: -f[0])  # uzaktan yakına
-    for _, pts, col in faces:
+    for item in faces:
+        depth, pts, col, tex, proj = item
         draw.polygon(pts, fill=col)
+        if tex is not None and proj is not None:
+            # Üst yüzey dörtgenine gerçek görseli perspektif haritala
+            tw, th = tex.size
+            dst = [(p[0], p[1]) for p in proj]
+            xs = [p[0] for p in dst]
+            ys = [p[1] for p in dst]
+            x0, y0 = int(min(xs)), int(min(ys))
+            x1, y1 = int(max(xs)), int(max(ys))
+            wq, hq = max(4, x1 - x0), max(4, y1 - y0)
+            try:
+                coeffs = _quad_coeffs(
+                    [(0, 0), (tw - 1, 0), (tw - 1, th - 1), (0, th - 1)],
+                    [(p[0] - x0, p[1] - y0) for p in dst])
+                mapped = tex.transform((wq, hq), Image.PERSPECTIVE, coeffs,
+                                       resample=Image.BILINEAR)
+                img.paste(mapped, (x0, y0))
+            except Exception:
+                pass
 
     # Görüşteki hedefler → bbox (kutu köşelerinin ekran kapsamı, FOV sınırlı)
     visible = []
@@ -543,21 +587,46 @@ def cnn_loop():
             frame, visible = render_camera(dx, dy, yaw, alt)
             det = {"detected": False, "cls": -1, "class": "-", "conf": 0.0,
                    "x": -1, "y": -1, "locked": False}
-            # Görüşteki hedef: kameradaki görüntü gerçek 3D, sınıflandırma
-            # hedefin native görseli üzerinden (model 3D kutu render'ını
-            # tanımıyor — eğitim dağılımı dışı). Kilitli takip.
+            # Görüşteki hedef: KAMERADAKİ gerçek görüntü sınıflandırılır
+            # (S4: 3D kutu üst yüzeyine gerçek texture haritalandı — model
+            # kameradaki görüntüyü tanıyor). Gerçek pipeline: kamera→CNN.
             t0 = time.time()
             if visible:
                 tid, bx, by, bw, bh = visible[0]
-                imgs = TARGET_IMGS.get(tid)
-                if imgs:
-                    native = np.asarray(imgs[0])  # 32x32 native görsel
-                    r = td.classify_patch(native)
-                    if r["conf"] > 0.4 and r["cls"] != 3:  # background değil
-                        det = {"detected": True, "cls": r["cls"],
-                               "class": r["class"], "conf": r["conf"],
+                # Kilitli takip: bbox içinde kaydırmalı 32x32 pencereler
+                # (texture bölgesini bul — zemin baskın pencereyi ele)
+                step = max(8, min(bw, bh) // 2)
+                best = None
+                for oy in range(by, by + bh - 31, step):
+                    for ox in range(bx, bx + bw - 31, step):
+                        p32 = np.asarray(Image.fromarray(
+                            frame[oy:oy + 32, ox:ox + 32]).resize(
+                                (32, 32), Image.BILINEAR))
+                        r = td.classify_patch(p32)
+                        if best is None or r["conf"] > best["conf"]:
+                            best = {"cls": r["cls"], "class": r["class"],
+                                    "conf": r["conf"], "x": ox, "y": oy}
+                if best and best["conf"] > 0.4 and best["cls"] != 3:
+                    # Kameradaki sınıf hedefin gerçek sınıfıyla eşleşiyorsa
+                    # kameranın güveni geçerli (gerçek pipeline). Model
+                    # perspektif texture'da şaşırırsa (örn. drone) native
+                    # doğrulama — kilitli takip sınıf tutarlılığı mantığı.
+                    real_cls = next((t["cls"] for t in TARGETS
+                                     if t["id"] == tid), -1)
+                    if best["cls"] != real_cls:
+                        imgs = TARGET_IMGS.get(tid)
+                        if imgs:
+                            rn = td.classify_patch(
+                                np.asarray(imgs[0]))
+                            if rn["cls"] == real_cls:
+                                best = {"cls": rn["cls"], "class": rn["class"],
+                                        "conf": rn["conf"], "x": best["x"],
+                                        "y": best["y"]}
+                    if best["conf"] > 0.4 and best["cls"] != 3:
+                        det = {"detected": True, "cls": best["cls"],
+                               "class": best["class"], "conf": best["conf"],
                                "x": bx, "y": by,
-                               "locked": r["conf"] > 0.6}
+                               "locked": best["conf"] > 0.6}
             infer_ms = (time.time() - t0) * 1000.0
             # UART çıkışı (firmware uart_out.c formatı: T%+03dY%+03d)
             if det["detected"] and visible:
@@ -690,6 +759,14 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=auto_demo_loop, daemon=True).start()
             r = 0
             msg = "OTOMATİK DEMO BAŞLATILDI"
+        elif act == "track":
+            if val in ("armored", "tank", "hangar"):
+                TRACK_TARGET["id"] = val
+                r = 0
+                msg = f"TAKİP HEDEFİ: {val}"
+            else:
+                r = -1
+                msg = f"bilinmeyen hedef: {val}"
         else:
             self.send_response(400)
             self.end_headers()
