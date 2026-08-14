@@ -84,18 +84,18 @@
   </div>
 
   <div class="controls">
-    <button class="btn primary" onclick="cmd('demo')">▶ OTOMATİK DEMO</button>
-    <button class="btn primary" onclick="cmd('takeoff')">▲ KALK (10m)</button>
-    <button class="btn danger" onclick="cmd('land')">▼ İNİŞ</button>
-    <button class="btn" onclick="cmd('target','tank')">🎯 TANK'A DÖN</button>
-    <button class="btn" onclick="cmd('target','hangar')">🏢 HANGARA DÖN</button>
-    <button class="btn" onclick="cmd('target','armored')">🚗 ZIRHLIYA DÖN</button>
-    <button class="btn" onclick="cmd('track','armored')">⏱ TAKİP: ZIRHLI</button>
-    <button class="btn" onclick="cmd('track','tank')">⏱ TAKİP: TANK</button>
-    <button class="btn" onclick="cmd('yaw_to','0')">N 0°</button>
-    <button class="btn" onclick="cmd('yaw_to','90')">E 90°</button>
-    <button class="btn" onclick="cmd('yaw_to','180')">S 180°</button>
-    <button class="btn" onclick="cmd('yaw_to','270')">W 270°</button>
+    <button class="btn primary" onclick="cmd('demo', null, this)">▶ OTOMATİK DEMO</button>
+    <button class="btn primary" onclick="cmd('takeoff', null, this)">▲ KALK (10m)</button>
+    <button class="btn danger" onclick="cmd('land', null, this)">▼ İNİŞ</button>
+    <button class="btn" onclick="cmd('target','tank', this)">🎯 TANK'A DÖN</button>
+    <button class="btn" onclick="cmd('target','hangar', this)">🏢 HANGARA DÖN</button>
+    <button class="btn" onclick="cmd('target','armored', this)">🚗 ZIRHLIYA DÖN</button>
+    <button class="btn" onclick="cmd('track','armored', this)">⏱ TAKİP: ZIRHLI</button>
+    <button class="btn" onclick="cmd('track','tank', this)">⏱ TAKİP: TANK</button>
+    <button class="btn" onclick="cmd('yaw_to','0', this)">N 0°</button>
+    <button class="btn" onclick="cmd('yaw_to','90', this)">E 90°</button>
+    <button class="btn" onclick="cmd('yaw_to','180', this)">S 180°</button>
+    <button class="btn" onclick="cmd('yaw_to','270', this)">W 270°</button>
   </div>
   <div class="cmdlog" id="cmdlog">—</div>
 
@@ -116,19 +116,30 @@
 const $ = id => document.getElementById(id);
 const TYPES = {0:'tank',1:'armored_vehicle',2:'drone_uav',3:'background',4:'military_building'};
 
-// Kontrol komutu gönder
-async function cmd(act, val) {
+// Kontrol komutu gönder (timeout + anında buton geri bildirimi)
+async function cmd(act, val, btn) {
+  if (btn) {
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = '⏳';
+    setTimeout(() => { btn.disabled = false; btn.textContent = orig; }, 1200);
+  }
   const q = '/cmd?act=' + act + (val ? '&val=' + val : '');
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), 12000);
   try {
-    const r = await fetch(q, {method:'POST'});
+    const r = await fetch(q, {method:'POST', signal: ctl.signal});
     const j = await r.json();
     const cl = $('cmdlog');
-    cl.innerHTML = '<span>›</span> ' + j.msg + ' ' + (j.ok ? '✓' : '✗ (komut reddedildi)') + ' · ' + new Date().toLocaleTimeString('tr-TR');
-  } catch(e) { $('cmdlog').textContent = 'komut gönderilemedi'; }
+    cl.innerHTML = '<span>›</span> ' + j.msg + ' ' + (j.ok ? '✓' : '✗ (reddedildi)') + ' · ' + new Date().toLocaleTimeString('tr-TR');
+  } catch(e) {
+    $('cmdlog').innerHTML = '<span>›</span> <b style="color:#f87171">zaman aşımı / ağ hatası</b> — tekrar dene';
+  } finally { clearTimeout(t); }
 }
 
-// Kamera görüntüsü — ~10 FPS akış (ağ üzerinden makul; lokal/stand'da tam akıcı)
-setInterval(() => { $('cam').src = '/cam?t=' + Date.now(); }, 100);
+// Kamera görüntüsü — 400ms (2.5 FPS stabil; Cloudflare RTT ~400-800ms,
+// daha hızlı istekler üst üste biner ve kareler iptal olur = takılma)
+setInterval(() => { $('cam').src = '/cam?t=' + Date.now(); }, 400);
 
 // Sahne canvas
 const cv = $('scene'), ctx = cv.getContext('2d');
@@ -224,7 +235,7 @@ async function tick() {
   }
 }
 tick();
-setInterval(tick, 200);
+setInterval(tick, 300);
 
 // Sahne: 60 FPS canvas (veri 5 Hz — lerp ile akıcı hareket)
 let sdata = null, sm = null;
