@@ -200,6 +200,40 @@ def yaw_to_target(tid):
     return do_yaw_to(int(round(yaw)) % 360)
 
 
+# ---------- Otomatik demo (panel açan canlı tespit görsün) ----------
+DEMO_RUN = {"active": False}
+
+
+def auto_demo_loop():
+    """Kalkış → zırhlıya dönüş → takip. Butonlara gerek yok — canlı tespit."""
+    if DEMO_RUN["active"]:
+        return
+    DEMO_RUN["active"] = True
+    try:
+        print("[DEMO] başlatıldı — EKF/GPS bekleniyor...")
+        t0 = time.time()
+        while time.time() - t0 < 150:
+            with STATE_LOCK:
+                ok = STATE["gps_fix"] >= 3 and STATE["time"] > 5
+            if ok:
+                break
+            time.sleep(1)
+
+        print("[DEMO] kalkış...")
+        do_takeoff(10.0)
+        time.sleep(25)  # takeoff tamamlansın
+
+        print("[DEMO] zırhlı araca dönüş...")
+        yaw_to_target("armored")
+        time.sleep(30)  # yaw dönüşü + CNN kilidi
+
+        print("[DEMO] hazır — zırhlı takip modunda")
+    except Exception as e:
+        print(f"[DEMO] hata: {e}")
+    finally:
+        DEMO_RUN["active"] = False
+
+
 def start_sitl():
     proc = subprocess.Popen(
         [BIN, "--home", "40.7645,29.9269,0,0", "--model", "quad",
@@ -243,7 +277,8 @@ def render_camera(dx, dy, yaw, alt=10.0):
         imgs = TARGET_IMGS.get(t["id"])
         if not imgs:
             continue
-        tgt = imgs[int(time.time() * 2) % len(imgs)]
+        # SABİT görsel — dönen görseller captcha "araç seçin" efekti veriyordu
+        tgt = imgs[0]
         tgt = tgt.resize((size_px, size_px), Image.BILINEAR)
         sy = int(R_H * 0.55)
         # NOT: mask'sız paste — RGB görsel mask olamaz ("bad transparency mask")
@@ -384,6 +419,10 @@ class Handler(BaseHTTPRequestHandler):
         elif act == "target":
             r = yaw_to_target(val)
             msg = f"HEDEFE DÖN: {val}"
+        elif act == "demo":
+            threading.Thread(target=auto_demo_loop, daemon=True).start()
+            r = 0
+            msg = "OTOMATİK DEMO BAŞLATILDI"
         else:
             self.send_response(400)
             self.end_headers()
@@ -445,6 +484,10 @@ def main():
 
     threading.Thread(target=mavlink_loop, daemon=True).start()
     threading.Thread(target=cnn_loop, daemon=True).start()
+
+    # Otomatik demo: kalkış → zırhlıya dönüş → canlı tespit
+    threading.Thread(target=auto_demo_loop, daemon=True).start()
+    print("[DEMO] otomatik demo arka planda başladı")
 
     print(f"[WEB] http://0.0.0.0:{args.port}")
     srv = ThreadingHTTPServer(("0.0.0.0", args.port), Handler)
