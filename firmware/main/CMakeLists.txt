@@ -5,6 +5,7 @@ idf_component_register(
         "inference_int8.c"
         "sliding_window.c"
         "tracker.c"
+        "uart_out.c"
     INCLUDE_DIRS
         "."
     REQUIRES

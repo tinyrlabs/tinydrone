@@ -101,3 +101,138 @@ void sw_detect(const uint8_t *frame,
         out->offset_y = (2.0 * bbox_cy / SW_FRAME_H) - 1.0;
     }
 }
+
+/* ── Takip modu (Faz 4.6) ───────────────────────────────────── */
+
+void sw_tracker_init(SWTracker *t) {
+    t->locked = 0;
+    t->last_x = 0;
+    t->last_y = 0;
+    t->last_cls = 0;
+    t->lost_count = 0;
+}
+
+/* Tek konumda inference: patch çıkar → tahmin + güven. */
+static double infer_at(const uint8_t *frame, int fx, int fy,
+                       int (*infer_cb)(const double *, double *),
+                       double patch_buf[3072], int *cls_out) {
+    extract_patch(frame, fx, fy, patch_buf);
+    double probs[SW_NUM_CLASSES];
+    int pred = infer_cb(patch_buf, probs);
+    *cls_out = pred;
+    return pred != SW_TARGET_BG ? probs[pred] : 0.0;
+}
+
+/* Kilitli konum etrafında 3x3 arama (stride 4). */
+static double search_around(const uint8_t *frame,
+                            int (*infer_cb)(const double *, double *),
+                            int cx, int cy,
+                            int *best_x, int *best_y, int *best_cls,
+                            double patch_buf[3072]) {
+    double best = 0.0;
+    *best_x = cx;
+    *best_y = cy;
+    *best_cls = 0;
+
+    for (int dy = -SW_STRIDE_FINE; dy <= SW_STRIDE_FINE; dy += SW_STRIDE_FINE) {
+        for (int dx = -SW_STRIDE_FINE; dx <= SW_STRIDE_FINE; dx += SW_STRIDE_FINE) {
+            int fx = cx + dx, fy = cy + dy;
+            if (fx < 0 || fy < 0 || fx + SW_WIN > SW_FRAME_W || fy + SW_WIN > SW_FRAME_H)
+                continue;
+            int cls;
+            double c = infer_at(frame, fx, fy, infer_cb, patch_buf, &cls);
+            if (c > best) {
+                best = c;
+                *best_x = fx;
+                *best_y = fy;
+                *best_cls = cls;
+            }
+        }
+    }
+    return best;
+}
+
+/* Sonucu doldur (bbox + offset). */
+static void fill_detection(SWDetection *out, int x, int y, int cls, double conf) {
+    out->detected = 1;
+    out->x = x;
+    out->y = y;
+    out->w = SW_WIN;
+    out->h = SW_WIN;
+    out->cls = cls;
+    out->confidence = conf;
+    int bbox_cx = x + SW_WIN / 2;
+    int bbox_cy = y + SW_WIN / 2;
+    out->offset_x = (2.0 * bbox_cx / SW_FRAME_W) - 1.0;
+    out->offset_y = (2.0 * bbox_cy / SW_FRAME_H) - 1.0;
+}
+
+void sw_detect_track(const uint8_t *frame,
+                     int (*infer_cb)(const double *, double *),
+                     SWTracker *t, SWDetection *out) {
+    double patch[32 * 32 * 3];
+    out->detected = 0;
+    out->confidence = 0.0;
+
+    if (!t->locked) {
+        /* Tam tarama — hedef ara */
+        SWDetection d;
+        sw_detect(frame, infer_cb, &d);
+        if (d.detected && d.confidence >= SW_LOCK_CONF) {
+            t->locked = 1;
+            t->last_x = d.x;
+            t->last_y = d.y;
+            t->last_cls = d.cls;
+            t->lost_count = 0;
+            *out = d;
+        }
+        return;
+    }
+
+    /* Kilitli: 1) önceki konumda tek inference */
+    int cls;
+    double conf = infer_at(frame, t->last_x, t->last_y, infer_cb, patch, &cls);
+
+    if (conf >= SW_LOCK_CONF && cls == t->last_cls) {
+        /* Hedef hâlâ orada, sınıf aynı — kilit devam */
+        t->lost_count = 0;
+        fill_detection(out, t->last_x, t->last_y, cls, conf);
+        return;
+    }
+
+    if (conf >= SW_LOST_CONF) {
+        /* Düşük güven veya sınıf değişimi — çevre ara */
+        int bx, by, bcls;
+        double bc = search_around(frame, infer_cb, t->last_x, t->last_y,
+                                  &bx, &by, &bcls, patch);
+        if (bc >= SW_LOCK_CONF && bcls == t->last_cls) {
+            t->lost_count = 0;
+            t->last_x = bx;
+            t->last_y = by;
+            fill_detection(out, bx, by, bcls, bc);
+            return;
+        }
+        if (bc >= SW_LOST_CONF) {
+            /* Orta güven veya sınıf farklı — konumu güncelle ama sınıfı
+             * KORU ve sayacı artır (sınıf değişimi güvenli değilse kilit
+             * 3 kare içinde çözülür, yeniden tarama başlar) */
+            t->last_x = bx;
+            t->last_y = by;
+            fill_detection(out, bx, by, bcls, bc);
+            t->lost_count++;
+            if (t->lost_count >= SW_MAX_LOST) {
+                t->locked = 0;
+                t->lost_count = 0;
+            }
+            return;
+        }
+    }
+
+    /* Kayıp kare */
+    t->lost_count++;
+    if (t->lost_count >= SW_MAX_LOST) {
+        /* Kalıcı kayıp — tam taramaya dön */
+        t->locked = 0;
+        t->lost_count = 0;
+    }
+}

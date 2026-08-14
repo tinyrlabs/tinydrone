@@ -23,6 +23,7 @@
 #include "inference_int8.h"  /* int8 — ESP32 için 4x hızlı */
 #include "sliding_window.h"
 #include "tracker.h"
+#include "uart_out.h"
 
 static const char *TAG = "tinydrone";
 
@@ -55,9 +56,15 @@ void app_main(void) {
     tracker_init();
     ESP_LOGI(TAG, "Servolar OK");
 
+    uart_out_init();
+    ESP_LOGI(TAG, "UART çıkışı OK (GPIO4/5, 115200)");
+
     uint8_t frame[SW_FRAME_W * SW_FRAME_H * 3];
     uint32_t frame_count = 0;
     SWDetection det;
+    SWTracker trk;
+    sw_tracker_init(&trk);
+    int uart_sent_lost = 0;
 
     while (1) {
         int64_t t0 = esp_timer_get_time();
@@ -69,17 +76,26 @@ void app_main(void) {
             continue;
         }
 
-        /* 2. Sliding window ile hedef tespit */
-        sw_detect(frame, sw_infer_cb, &det);
+        /* 2. Tespit + takip (kilitliyken hızlı, kayıpta tam tarama) */
+        sw_detect_track(frame, sw_infer_cb, &trk, &det);
         frame_count++;
 
-        /* 3. Takip kararı */
+        /* 3. Takip kararı + UART çıkışı */
         if (det.detected && det.confidence >= CONF_THRESHOLD) {
             tracker_update(det.offset_x, det.offset_y);
-            ESP_LOGI(TAG, "HEDEF: sınıf=%d güven=%.2f bbox=(%d,%d) off=(%.2f,%.2f)",
-                     det.cls, det.confidence, det.x, det.y, det.offset_x, det.offset_y);
-        } else if (frame_count % 20 == 0) {
-            ESP_LOGI(TAG, "tarama: hedef yok (frame=%lu)", frame_count);
+            uart_out_send_offset(det.offset_x, det.offset_y);
+            uart_sent_lost = 0;
+            ESP_LOGI(TAG, "HEDEF: sınıf=%d güven=%.2f bbox=(%d,%d) off=(%.2f,%.2f) kilit=%d",
+                     det.cls, det.confidence, det.x, det.y, det.offset_x, det.offset_y,
+                     trk.locked);
+        } else {
+            if (!uart_sent_lost) {
+                uart_out_send_lost();
+                uart_sent_lost = 1;
+            }
+            if (frame_count % 20 == 0) {
+                ESP_LOGI(TAG, "tarama: hedef yok (frame=%lu kilit=%d)", frame_count, trk.locked);
+            }
         }
 
         int64_t t1 = esp_timer_get_time();

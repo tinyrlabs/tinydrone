@@ -31,6 +31,39 @@ typedef struct {
     double offset_y;     /* [-1, 1] */
 } SWDetection;
 
+/* ── Takip modu (Faz 4.6) ───────────────────────────────────── */
+
+/* Kilit eşikleri (histerezis) */
+#define SW_LOCK_CONF     0.60  /* kilit için gerekli güven */
+#define SW_LOST_CONF     0.40  /* bu güvenin altı = kayıp adayı */
+#define SW_MAX_LOST      3     /* ardışık kayıp kare → tam tarama */
+
+typedef struct {
+    int locked;            /* hedef kilitli mi */
+    int last_x, last_y;    /* son kilit konumu (pencere üst-sol) */
+    int last_cls;          /* son hedef sınıf */
+    int lost_count;        /* ardışık kayıp kare sayısı */
+} SWTracker;
+
+/** Tracker'ı sıfırla (kilit yok, tam tarama modu). */
+void sw_tracker_init(SWTracker *t);
+
+/**
+ * Tespit + takip birleşik döngü.
+ *
+ * Kilitliyken: önceki konumda 1 inference → güven yüksekse devam,
+ * değilse 3x3 çevre araması → bulunamazsa lost_count++ → 3 ise
+ * tam taramaya dön. Kilitli değilken: tam sliding window.
+ *
+ * @param frame     RGB888 160x120
+ * @param infer_cb  int8 inference callback
+ * @param t         tracker durumu (kareler arası korunur)
+ * @param out       sonuç (detected=1 ise geçerli)
+ */
+void sw_detect_track(const uint8_t *frame,
+                     int (*infer_cb)(const double *, double *),
+                     SWTracker *t, SWDetection *out);
+
 /**
  * Frame'de hedef ara.
  *
