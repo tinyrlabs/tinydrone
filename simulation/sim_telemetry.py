@@ -119,9 +119,10 @@ def _load_bg_tiles():
 
 BG_TILES = _load_bg_tiles()
 
-# Render doğrudan 160x120'de (modelin tanıdığı format — ara küçültme
-# piksel desenini değiştirip yanlış pozitif üretiyordu)
-R_W, R_H = FRAME_W, FRAME_H
+# Render çözünürlüğü: 960x720 (4:3 — CNN 160x120'ye küçültülür, panel 720p
+# gösterir). Ölçek oranı her iki eksende 6 (bbox dönüşümü basit).
+R_W, R_H = FRAME_W * 6, FRAME_H * 6  # 960 x 720
+RENDER_SCALE = 6
 
 # Zemin: NATIVE 32x32 background görselleri grid (modelin eğitim formatı —
 # büyütülmüş görseller modelde yanlış pozitif üretiyor)
@@ -589,15 +590,21 @@ def cnn_loop():
                 dx, dy = STATE["drone_x"], STATE["drone_y"]
                 yaw = STATE["drone_yaw"]
                 alt = STATE["drone_alt"]
-            frame, visible = render_camera(dx, dy, yaw, alt)
+            frame720, visible = render_camera(dx, dy, yaw, alt)
+            # CNN girişi: 720p render → 160x120 (model formatı)
+            frame = np.asarray(Image.fromarray(frame720).resize(
+                (FRAME_W, FRAME_H), Image.BILINEAR))
+            vis160 = [(tid, bx // RENDER_SCALE, by // RENDER_SCALE,
+                       max(2, bw // RENDER_SCALE), max(2, bh // RENDER_SCALE))
+                      for tid, bx, by, bw, bh in visible]
             det = {"detected": False, "cls": -1, "class": "-", "conf": 0.0,
                    "x": -1, "y": -1, "locked": False}
             # Görüşteki hedef: KAMERADAKİ gerçek görüntü sınıflandırılır
             # (S4: 3D kutu üst yüzeyine gerçek texture haritalandı — model
             # kameradaki görüntüyü tanıyor). Gerçek pipeline: kamera→CNN.
             t0 = time.time()
-            if visible:
-                tid, bx, by, bw, bh = visible[0]
+            if vis160:
+                tid, bx, by, bw, bh = vis160[0]
                 # Kilitli takip: bbox içinde kaydırmalı 32x32 pencereler
                 # (texture bölgesini bul — zemin baskın pencereyi ele)
                 step = max(8, min(bw, bh) // 2)
@@ -648,21 +655,23 @@ def cnn_loop():
                 STATE["fps"] = 1.0 / max(time.time() - last, 1e-6)
                 STATE["infer_ms"] = round(infer_ms, 2)
                 STATE["uart"] = uart
-                STATE["cam_jpeg"] = _frame_to_jpeg(frame, det)
+                STATE["cam_jpeg"] = _frame_to_jpeg(frame720, det, RENDER_SCALE)
             last = time.time()
         except Exception as e:
             print(f"[CNN] hata: {e}")
         time.sleep(0.008)  # ~65 FPS sabit (döngü ~7ms: render+CNN+JPEG)
 
 
-def _frame_to_jpeg(frame, det):
-    """Frame'e bbox çiz, JPEG'e çevir (base64)."""
+def _frame_to_jpeg(frame, det, scale=1):
+    """Frame'e bbox çiz (det 160x120 koord — scale ile büyüt), JPEG base64."""
     img = Image.fromarray(frame)
     d = ImageDraw.Draw(img)
     if det["detected"]:
-        x, y = det["x"], det["y"]
-        d.rectangle([x, y, x + 32, y + 32], outline=(139, 92, 246), width=2)
-        d.text((x, max(0, y - 10)),
+        x, y = det["x"] * scale, det["y"] * scale
+        w, h = 32 * scale, 32 * scale
+        d.rectangle([x, y, x + w, y + h], outline=(139, 92, 246), width=max(2, scale // 2))
+        fs = max(10, scale * 2)
+        d.text((x, max(0, y - fs - 4)),
                f"{det['class']} %{det['conf']*100:.0f}",
                fill=(139, 92, 246))
     buf = io.BytesIO()
