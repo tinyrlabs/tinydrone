@@ -55,3 +55,5 @@ firmware/dataset
 
 firmware/test_sliding
 firmware/test_track
+simulation/*.so
+simulation/__pycache__/
