@@ -108,8 +108,9 @@ $(BUILD_DIR)/test_track: $(FW_DIR)/test_track.c $(FW_DIR)/main/sliding_window.c 
 	$(CC) $(CFLAGS) $(FW_INC) -I$(TRAIN_DIR) $^ -o $@ $(LDFLAGS)
 
 $(BUILD_DIR)/compare_i8: $(TRAIN_DIR)/compare_i8.c $(TRAIN_DIR)/float_inference.c \
-                         $(TRAIN_DIR)/inference_int8.c $(TINYCML_LIB) | $(BUILD_DIR)
-	$(CC) $(CFLAGS) -I$(TINYCML_INC) -I$(TRAIN_DIR) -I$(MODEL_DIR) $^ -o $@ $(LDFLAGS)
+                         $(FW_DIR)/main/inference_int8.c $(TINYCML_LIB) | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -I$(TINYCML_INC) -I$(TRAIN_DIR) -I$(MODEL_DIR) -I$(FW_DIR)/main \
+		$^ -o $@ $(LDFLAGS)
 
 clean:
 	rm -rf $(BUILD_DIR)

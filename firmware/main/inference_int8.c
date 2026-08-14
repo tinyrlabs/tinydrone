@@ -9,6 +9,8 @@
  */
 
 #include "inference_int8.h"
+#include "sliding_window.h"  /* SW_NUM_CLASSES */
+#include <stdio.h>
 #include <math.h>
 #include <string.h>
 #include <stdlib.h>
