@@ -41,6 +41,24 @@ static int sw_infer_cb(const double *patch, double *probs) {
     return inference_int8_run(patch, probs);
 }
 
+/* Frame differencing: iki kare arasında yeterli hareket var mı?
+ * (30 FPS optimizasyonu — statik sahnede CNN çalışmaz, sonuç korunur) */
+#define SW_MOTION_THRESHOLD 150  /* farklı piksel sayısı eşiği */
+#define SW_PIXEL_DIFF 24         /* piksel başına toplam RGB farkı eşiği */
+
+static int frame_differs(const uint8_t *a, const uint8_t *b) {
+    int diff = 0;
+    for (int i = 0; i < SW_FRAME_W * SW_FRAME_H; i++) {
+        int d = abs(a[i * 3] - b[i * 3]) +
+                abs(a[i * 3 + 1] - b[i * 3 + 1]) +
+                abs(a[i * 3 + 2] - b[i * 3 + 2]);
+        if (d > SW_PIXEL_DIFF) {
+            if (++diff > SW_MOTION_THRESHOLD) return 1;
+        }
+    }
+    return 0;
+}
+
 void app_main(void) {
     ESP_LOGI(TAG, "tinydrone başlatılıyor...");
 
@@ -60,7 +78,10 @@ void app_main(void) {
     ESP_LOGI(TAG, "UART çıkışı OK (GPIO4/5, 115200)");
 
     uint8_t frame[SW_FRAME_W * SW_FRAME_H * 3];
+    static uint8_t prev_frame[SW_FRAME_W * SW_FRAME_H * 3];
     uint32_t frame_count = 0;
+    int frame_valid = 0;  /* prev_frame dolu mu */
+    uint32_t static_frames = 0;  /* CNN çalıştırılmadan geçen kare */
     SWDetection det;
     SWTracker trk;
     sw_tracker_init(&trk);
@@ -76,8 +97,14 @@ void app_main(void) {
             continue;
         }
 
-        /* 2. Tespit + takip (kilitliyken hızlı, kayıpta tam tarama) */
-        sw_detect_track(frame, sw_infer_cb, &trk, &det);
+        /* 2. Tespit + takip — hareket varsa işle, statikse sonucu koru */
+        if (!frame_valid || frame_differs(frame, prev_frame)) {
+            sw_detect_track(frame, sw_infer_cb, &trk, &det);
+            memcpy(prev_frame, frame, sizeof(prev_frame));
+            frame_valid = 1;
+        } else {
+            static_frames++;
+        }
         frame_count++;
 
         /* 3. Takip kararı + UART çıkışı */
@@ -101,9 +128,9 @@ void app_main(void) {
         int64_t t1 = esp_timer_get_time();
         int fps = 1000000 / (t1 - t0 > 0 ? t1 - t0 : 1);
         if (frame_count % 50 == 0) {
-            ESP_LOGI(TAG, "FPS: %d", fps);
+            ESP_LOGI(TAG, "FPS: %d (statik: %lu/%lu)", fps, static_frames, frame_count);
         }
 
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(5));  /* 30 FPS hedefi — inference zaten zaman alır */
     }
 }

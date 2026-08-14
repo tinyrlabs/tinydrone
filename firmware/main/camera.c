@@ -56,8 +56,8 @@ int camera_init(void) {
         .pixel_format = PIXFORMAT_RGB565,  /* renk bilgisi için */
         .frame_size = FRAMESIZE_QQVGA,
         .jpeg_quality = 12,
-        .fb_count = 1,
-        .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
+        .fb_count = 2,                     /* double buffer — 30 FPS için */
+        .grab_mode = CAMERA_GRAB_LATEST,   /* en yeni kare, eskiyi atla (düşük gecikme) */
         .fb_location = CAMERA_FB_IN_PSRAM,
     };
 
