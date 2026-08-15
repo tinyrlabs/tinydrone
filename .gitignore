@@ -48,6 +48,9 @@ demo
 evaluate
 train_asan
 train_tinydrone
+compare_i8
+debug_i8
+quantize
 
 # Firmware test artifacts
 firmware/test_fi
