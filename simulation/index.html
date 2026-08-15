@@ -75,12 +75,28 @@
     <div class="panel">
       <h2>Drone Kamerası + CNN <span>(canlı)</span></h2>
       <img id="cam" src="/cam" alt="kamera">
+      <div style="margin:8px 0;display:flex;gap:8px;align-items:center;">
+        <button class="btn" id="viewbtn" onclick="toggleView()">🎥 3. ŞAHIS</button>
+        <span style="font-size:11px;color:var(--dim);">1. ŞAHIS (drone kamerası) aktif</span>
+      </div>
       <div class="det-line" id="detline">Tespit bekleniyor...</div>
     </div>
     <div class="panel">
       <h2>Sanal Sahne <span>(üstten görünüm)</span></h2>
       <canvas id="scene" width="640" height="400"></canvas>
     </div>
+  </div>
+
+  <!-- Görev paneli -->
+  <div class="panel" style="margin-bottom:14px;">
+    <h2>GÖREV <span id="mis_state" style="color:var(--acc);">HAZIR</span>
+      <span id="mis_time" style="font-size:11px;color:var(--dim);"></span></h2>
+    <div class="controls" style="margin:0 0 8px 0;">
+      <button class="btn primary" onclick="cmd('mission','start', this)">🚀 GÖREV BAŞLAT</button>
+      <button class="btn danger" onclick="cmd('mission','end', this)">■ GÖREVİ SONLANDIR</button>
+      <span style="font-size:11px;color:var(--dim);">Başlat → kalkış → 360° arama → tespit → takip → iniş</span>
+    </div>
+    <div class="cmdlog" id="mislog" style="max-height:110px;overflow-y:auto;">Görev geçmişi burada...</div>
   </div>
 
   <div class="controls">
@@ -138,9 +154,19 @@ async function cmd(act, val, btn) {
   } finally { clearTimeout(t); }
 }
 
+// Kamera görünümü — 1. şahıs (drone kamerası) / 3. şahıs (drone arkası)
+let camView = 'first';
+function toggleView() {
+  camView = (camView === 'first') ? 'third' : 'first';
+  const btn = $('viewbtn');
+  btn.textContent = camView === 'first' ? '🎥 3. ŞAHIS' : '🎥 1. ŞAHIS';
+  const sp = btn.nextElementSibling;
+  sp.textContent = camView === 'first' ? '1. ŞAHIS (drone kamerası) aktif' : '3. ŞAHIS (drone arkası) aktif';
+  $('cam').src = '/cam?view=' + camView + '&t=' + Date.now();
+}
 // Kamera görüntüsü — 400ms (2.5 FPS stabil; Cloudflare RTT ~400-800ms,
 // daha hızlı istekler üst üste biner ve kareler iptal olur = takılma)
-setInterval(() => { $('cam').src = '/cam?t=' + Date.now(); }, 400);
+setInterval(() => { $('cam').src = '/cam?view=' + camView + '&t=' + Date.now(); }, 400);
 
 // Sahne canvas
 const cv = $('scene'), ctx = cv.getContext('2d');
@@ -223,6 +249,17 @@ async function tick() {
       $('trk').textContent = s.track.enabled
         ? ('OTONOM → ' + s.track.id) : 'MANUEL (takip kapalı)';
       $('trk').style.color = s.track.enabled ? '#4ade80' : '#fbbf24';
+    }
+    // Görev paneli
+    if (s.mission) {
+      const m = s.mission;
+      $('mis_state').textContent = m.active ? (m.state + ' ⏳') : m.state;
+      $('mis_state').style.color = m.active ? '#4ade80' : (m.state === 'TAMAM' ? '#fbbf24' : 'var(--acc)');
+      $('mis_time').textContent = m.active ? (' · ' + m.elapsed + 's') : '';
+      if (m.log && m.log.length) {
+        $('mislog').innerHTML = m.log.map(l =>
+          '<span>' + l.t + '</span> ' + l.msg).join('<br>');
+      }
     }
     // Tespit satırı
     const d = s.det || {};

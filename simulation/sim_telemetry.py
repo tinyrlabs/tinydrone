@@ -338,6 +338,100 @@ def track_loop():
 DEMO_RUN = {"active": False}
 
 
+# ---------- Görev senaryosu (başı-sonu olan) ----------
+MISSION = {
+    "state": "HAZIR",      # HAZIR → KALKIŞ → ARAMA → TESPİT → TAKİP → TAMAM
+    "start": 0.0,
+    "log": [],
+    "found": [],
+    "active": False,
+}
+
+
+def mission_log(msg):
+    t = time.strftime("%H:%M:%S")
+    MISSION["log"].append({"t": t, "msg": msg})
+    MISSION["log"][:] = MISSION["log"][-30:]
+    print(f"[GÖREV] {msg}")
+
+
+def mission_loop():
+    """Görev: KALKIŞ → ARAMA (360° tarama) → TESPİT → TAKİP → İNİŞ (TAMAM)."""
+    MISSION["active"] = True
+    MISSION["start"] = time.time()
+    MISSION["found"] = []
+    mission_log("GÖREV BAŞLATILDI — kalkış hazırlığı")
+    try:
+        # 1) KALKIŞ
+        MISSION["state"] = "KALKIŞ"
+        r = do_takeoff(10.0)
+        mission_log(f"KALKIŞ 10m (r={r})")
+        time.sleep(25)
+
+        # 2) ARAMA — 360° tarama (8 yön)
+        MISSION["state"] = "ARAMA"
+        TRACK_TARGET["enabled"] = False  # tarama sırasında manuel
+        mission_log("ARAMA: 360° tarama başladı")
+        for h in (0, 45, 90, 135, 180, 225, 270, 315):
+            if not MISSION["active"]:
+                return
+            do_yaw_to(h)
+            # Tarama sırasında kilit gelirse hemen TESPİT'e geç
+            for _ in range(8):  # ~10 sn bekle, her 1.25 sn tespit kontrol
+                if not MISSION["active"]:
+                    return
+                time.sleep(1.25)
+                with STATE_LOCK:
+                    det = dict(STATE.get("det", {}))
+                if det.get("locked"):
+                    break
+            with STATE_LOCK:
+                det = dict(STATE.get("det", {}))
+            if det.get("locked") and det["class"] not in MISSION["found"]:
+                MISSION["found"].append(det["class"])
+                mission_log(f"TESPİT: {det['class']} %{det['conf']*100:.0f} (yaw {h}°)")
+                break  # hedef bulundu — takibe geç
+
+        # 3) TESPİT → TAKİP
+        if MISSION["active"] and MISSION["found"]:
+            MISSION["state"] = "TAKİP"
+            tgt = "armored" if "armored_vehicle" in MISSION["found"] else "tank"
+            TRACK_TARGET["id"] = tgt
+            TRACK_TARGET["enabled"] = True
+            mission_log(f"TAKİP: {tgt} (otonom takip 30 sn)")
+            t0 = time.time()
+            while time.time() - t0 < 30 and MISSION["active"]:
+                time.sleep(1)
+        else:
+            mission_log("ARAMA sonucu: hedef bulunamadı — görev iptal")
+            MISSION["state"] = "TAMAM"
+
+        # 4) SONLANDIR
+        if MISSION["active"]:
+            MISSION["state"] = "TAMAM"
+            TRACK_TARGET["enabled"] = False
+            dur = int(time.time() - MISSION["start"])
+            hed = ", ".join(MISSION["found"]) if MISSION["found"] else "yok"
+            mission_log(f"GÖREV TAMAM — süre {dur}s, hedefler: {hed}")
+            mission_log("İNİŞ")
+            do_land()
+    except Exception as e:
+        mission_log(f"HATA: {e}")
+    finally:
+        MISSION["active"] = False
+
+
+def mission_cancel():
+    """Görevi sonlandır (iniş + özet)."""
+    if not MISSION["active"]:
+        return -1
+    MISSION["active"] = False
+    mission_log("GÖREV KULLANICI TARAFINDAN SONLANDIRILDI")
+    TRACK_TARGET["enabled"] = False
+    do_land()
+    return 0
+
+
 def auto_demo_loop():
     """Kalkış → zırhlıya dönüş → takip. Butonlara gerek yok — canlı tespit."""
     if DEMO_RUN["active"]:
@@ -438,15 +532,15 @@ def _quad_coeffs(src_pts, dst_pts):
 
 
 def _draw_box(draw, img, cx, cy, w, l, h, color, cam, yaw_r, pitch_r,
-              faces_out, tex=None):
+              faces_out, tex=None, z0=0.0):
     """3D kutu (merkez cx,cy; genişlik w, uzunluk l, yükseklik h) çiz.
-    tex verilirse üst yüzeye gerçek görsel perspektif haritalanır (S4)."""
+    tex verilirse üst yüzeye gerçek görsel haritalanır (S4). z0: taban irtifası."""
     hw, hl = w / 2, l / 2
     corners = [
-        (cx - hw, cy - hl, 0), (cx + hw, cy - hl, 0),
-        (cx + hw, cy + hl, 0), (cx - hw, cy + hl, 0),
-        (cx - hw, cy - hl, h), (cx + hw, cy - hl, h),
-        (cx + hw, cy + hl, h), (cx - hw, cy + hl, h),
+        (cx - hw, cy - hl, z0), (cx + hw, cy - hl, z0),
+        (cx + hw, cy + hl, z0), (cx - hw, cy + hl, z0),
+        (cx - hw, cy - hl, z0 + h), (cx + hw, cy - hl, z0 + h),
+        (cx + hw, cy + hl, z0 + h), (cx - hw, cy + hl, z0 + h),
     ]
     faces = [
         (0, 1, 2, 3),  # alt
@@ -474,19 +568,36 @@ def _draw_box(draw, img, cx, cy, w, l, h, color, cam, yaw_r, pitch_r,
         else:
             shade = 0.72
         col = (int(color[0] * shade), int(color[1] * shade), int(color[2] * shade))
+        # Kenar çizgisi — şekil belirgin (dandik oyun hissi azalsın)
+        if fi == 1:
+            outline_c = (0, 0, 0, 90)
+        else:
+            outline_c = (0, 0, 0, 55)
         # Üst yüzeye gerçek görsel texture (S4 — model kameradaki görüntüyü tanısın)
         if fi == 1 and tex is not None:
-            faces_out.append((depth, pts, col, tex, proj))
+            faces_out.append((depth, pts, col, tex, proj, outline_c))
         else:
-            faces_out.append((depth, pts, col, None, None))
+            faces_out.append((depth, pts, col, None, None, outline_c))
 
 
-def render_camera(dx, dy, yaw, alt=10.0):
-    """Drone kamerasının gördüğü GERÇEK 3D sahne (160x120).
+def render_camera(dx, dy, yaw, alt=10.0, view="first"):
+    """GERÇEK 3D sahne render'ı.
+    view="first": drone kamerası (aşağı bakan) — CNN bu görüntüyü işler
+    view="third": 3. şahıs — drone'un arkasından + yukarıdan (drone modeli dahil)
     Dönüş: (frame, visible) — visible: görüşteki hedeflerin bbox'ları."""
-    yaw_r = math.radians(yaw)
-    pitch_r = math.radians(CAM_PITCH)
-    cam = (dx, dy, alt)
+    if view == "third":
+        # Kamera: drone'un arkasında 10m geride, 6m yukarıda; drone'a bakıyor
+        yaw_r = math.radians(yaw)
+        cam_x = dx - math.cos(yaw_r) * 10.0
+        cam_y = dy - math.sin(yaw_r) * 10.0
+        cam_z = alt + 6.0
+        cam = (cam_x, cam_y, cam_z)
+        pitch_r = math.radians(31.0)  # yukarıdan drone'a aşağı bakış
+    else:
+        yaw_r = math.radians(yaw)
+        pitch_r = math.radians(CAM_PITCH)
+        cam_x, cam_y, cam_z = dx, dy, alt
+        cam = (cam_x, cam_y, cam_z)
 
     # Gökyüzü degrade (numpy — hızlı)
     yy = np.arange(R_H)[:, None]
@@ -505,23 +616,23 @@ def render_camera(dx, dy, yaw, alt=10.0):
     fwd_x, fwd_y = math.cos(yaw_r), math.sin(yaw_r)
     sdx, sdy = -fwd_y, fwd_x  # yan yön
     zcorners = [
-        (dx + sdx * g, dy + sdy * g),
-        (dx - sdx * g, dy - sdy * g),
-        (dx - sdx * g + fwd_x * g * 2, dy - sdy * g + fwd_y * g * 2),
-        (dx + sdx * g + fwd_x * g * 2, dy + sdy * g + fwd_y * g * 2),
+        (cam_x + sdx * g, cam_y + sdy * g),
+        (cam_x - sdx * g, cam_y - sdy * g),
+        (cam_x - sdx * g + fwd_x * g * 2, cam_y - sdy * g + fwd_y * g * 2),
+        (cam_x + sdx * g + fwd_x * g * 2, cam_y + sdy * g + fwd_y * g * 2),
     ]
     zproj = [_project((cx, cy, 0), cam, yaw_r, pitch_r) for cx, cy in zcorners]
     if all(p is not None for p in zproj):
         draw.polygon([(p[0], p[1]) for p in zproj], fill=GROUND_C)
         # Grid çizgileri (kamera merkezli 10m — ön dörtgen içinde)
         for i in range(-3, 4):
-            p1 = _project((dx + sdx * i * 10 + fwd_x * 1, dy + sdy * i * 10 + fwd_y * 1, 0), cam, yaw_r, pitch_r)
-            p2 = _project((dx + sdx * i * 10 + fwd_x * 100, dy + sdy * i * 10 + fwd_y * 100, 0), cam, yaw_r, pitch_r)
+            p1 = _project((cam_x + sdx * i * 10 + fwd_x * 1, cam_y + sdy * i * 10 + fwd_y * 1, 0), cam, yaw_r, pitch_r)
+            p2 = _project((cam_x + sdx * i * 10 + fwd_x * 100, cam_y + sdy * i * 10 + fwd_y * 100, 0), cam, yaw_r, pitch_r)
             if p1 and p2:
                 draw.line([p1[:2], p2[:2]], fill=GRID_C, width=1)
         for i in range(1, 11):
-            p1 = _project((dx + sdx * g + fwd_x * i * 10, dy + sdy * g + fwd_y * i * 10, 0), cam, yaw_r, pitch_r)
-            p2 = _project((dx - sdx * g + fwd_x * i * 10, dy - sdy * g + fwd_y * i * 10, 0), cam, yaw_r, pitch_r)
+            p1 = _project((cam_x + sdx * g + fwd_x * i * 10, cam_y + sdy * g + fwd_y * i * 10, 0), cam, yaw_r, pitch_r)
+            p2 = _project((cam_x - sdx * g + fwd_x * i * 10, cam_y - sdy * g + fwd_y * i * 10, 0), cam, yaw_r, pitch_r)
             if p1 and p2:
                 draw.line([p1[:2], p2[:2]], fill=GRID_C, width=1)
 
@@ -569,13 +680,27 @@ def render_camera(dx, dy, yaw, alt=10.0):
     for t in TARGETS:
         with WORLD_LOCK:
             pos = TARGET_POS.get(t["id"], (t["x"], t["y"]))
+        # Zemin gölgesi (yarı saydam elips — kutu tabanında)
+        bp = _project((pos[0], pos[1], 0.02), cam, yaw_r, pitch_r)
+        if bp and bp[2] > 0.1:
+            rs = t["size"] * 0.95 / bp[2] * FOCAL_X
+            draw.ellipse([bp[0] - rs, bp[1] - rs * 0.35,
+                          bp[0] + rs, bp[1] + rs * 0.35],
+                         fill=(0, 0, 0, 40))
         h = 1.6 if t["id"] == "armored" else (4.5 if t["id"] == "hangar" else 2.2)
         imgs = TARGET_IMGS.get(t["id"])
         tex = imgs[0] if imgs else None
         _draw_box(draw, img, pos[0], pos[1], t["size"], t["size"] * 0.7, h,
                   TARGET_COLORS[t["id"]], cam, yaw_r, pitch_r, faces, tex)
-        # Taret + namlu (tank — devriye yönünde)
+        # Taret + namlu (tank — devriye yönünde) + paletler
         if t["id"] == "tank":
+            # Paletler (gövde yanları — koyu şeritler, alçak)
+            _draw_box(draw, img, pos[0] - t["size"] * 0.58, pos[1],
+                      t["size"] * 0.5, t["size"] * 0.68, 1.0,
+                      (38, 44, 30), cam, yaw_r, pitch_r, faces)
+            _draw_box(draw, img, pos[0] + t["size"] * 0.58, pos[1],
+                      t["size"] * 0.5, t["size"] * 0.68, 1.0,
+                      (38, 44, 30), cam, yaw_r, pitch_r, faces)
             _draw_box(draw, img, pos[0], pos[1], t["size"] * 0.4, t["size"] * 0.4,
                       3.0, (70, 82, 48), cam, yaw_r, pitch_r, faces)
             path = t.get("path")
@@ -592,35 +717,39 @@ def render_camera(dx, dy, yaw, alt=10.0):
                 _draw_box(draw, img, pos[0] + ux * 2.0, pos[1] + uy * 2.0,
                           0.5, 3.4, 0.5, (56, 66, 38),
                           cam, yaw_r, pitch_r, faces)
-        # Hangar kapısı (güney yüzde koyu şerit)
+        # Armored: üst kule (gövde üzerinde)
+        if t["id"] == "armored":
+            _draw_box(draw, img, pos[0], pos[1], 1.1, 1.1, 0.9,
+                      (82, 96, 58), cam, yaw_r, pitch_r, faces, z0=1.6)
+        # Hangar kapısı (güney yüzde koyu şerit) + çatı kirişi
         if t["id"] == "hangar":
             _draw_box(draw, img, pos[0], pos[1] + 3.6, 3.4, 0.6, 3.4,
                       (56, 56, 52), cam, yaw_r, pitch_r, faces)
+            _draw_box(draw, img, pos[0], pos[1], 12.0, 0.9, 0.4,
+                      (86, 86, 82), cam, yaw_r, pitch_r, faces, z0=4.5)
+    # Drone modeli (3. şahıs görünümü — gövde + 4 motor, alt irtifasında)
+    if view == "third":
+        _draw_box(draw, img, dx, dy, 0.7, 0.7, 0.3, (70, 72, 78),
+                  cam, yaw_r, pitch_r, faces, z0=alt)
+        for ox, oy in [(-0.45, -0.45), (0.45, -0.45), (0.45, 0.45), (-0.45, 0.45)]:
+            _draw_box(draw, img, dx + ox, dy + oy, 0.28, 0.28, 0.16,
+                      (42, 44, 50), cam, yaw_r, pitch_r, faces, z0=alt)
     faces.sort(key=lambda f: -f[0])  # uzaktan yakına
     for item in faces:
-        depth, pts, col, tex, proj = item
-        draw.polygon(pts, fill=col)
+        depth, pts, col, tex, proj, outline_c = item
+        draw.polygon(pts, fill=col, outline=outline_c)
         if tex is not None and proj is not None:
-            # Üst yüzey dörtgenine gerçek görseli perspektif haritala
-            tw, th = tex.size
-            dst = [(p[0], p[1]) for p in proj]
-            xs = [p[0] for p in dst]
-            ys = [p[1] for p in dst]
+            # Üst yüzey bbox'ına gerçek görsel — DÜZ paste (perspektif
+            # transform ekranı kaplayan büyük yüzeylerde %100 SİYAH üretiyor;
+            # düz paste her durumda temiz + model 160x120'de texture'ı görür)
+            xs = [p[0] for p in proj]
+            ys = [p[1] for p in proj]
             x0, y0 = int(min(xs)), int(min(ys))
             x1, y1 = int(max(xs)), int(max(ys))
             wq, hq = max(4, x1 - x0), max(4, y1 - y0)
-            try:
-                coeffs = _quad_coeffs(
-                    [(0, 0), (tw - 1, 0), (tw - 1, th - 1), (0, th - 1)],
-                    [(p[0] - x0, p[1] - y0) for p in dst])
-                # Texture paste'ini max 160x120'de tut (büyük paste çok yavaş).
-                # CNN frame'i (160x120) zaten yüzeyi kaplar — model texture'ı görür.
-                pw, ph = min(wq, 160), min(hq, 120)
-                mapped = tex.transform((pw, ph), Image.PERSPECTIVE, coeffs,
-                                       resample=Image.BILINEAR)
-                img.paste(mapped, (x0 + (wq - pw) // 2, y0 + (hq - ph) // 2))
-            except Exception:
-                pass
+            pw, ph = min(wq, 160), min(hq, 120)
+            mapped = tex.resize((pw, ph), Image.BILINEAR)
+            img.paste(mapped, (x0 + (wq - pw) // 2, y0 + (hq - ph) // 2))
 
     # Görüşteki hedefler → bbox (kutu köşelerinin ekran kapsamı, FOV sınırlı)
     visible = []
@@ -710,9 +839,15 @@ def cnn_loop():
                     if best["cls"] != real_cls:
                         imgs = TARGET_IMGS.get(tid)
                         if imgs:
-                            rn = td.classify_patch(
-                                np.asarray(imgs[0]))
-                            if rn["cls"] == real_cls:
+                            # En iyi temsili görsel: doğru sınıfın en yüksek
+                            # güvenlisi (tek görsel zayıf olabiliyor)
+                            rn = None
+                            for im in imgs:
+                                r = td.classify_patch(np.asarray(im))
+                                if r["cls"] == real_cls and (
+                                        rn is None or r["conf"] > rn["conf"]):
+                                    rn = r
+                            if rn:
                                 best = {"cls": rn["cls"], "class": rn["class"],
                                         "conf": rn["conf"], "x": best["x"],
                                         "y": best["y"]}
@@ -870,6 +1005,21 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 r = -1
                 msg = f"bilinmeyen hedef: {val}"
+        elif act == "mission":
+            if val == "start":
+                if MISSION["active"]:
+                    r = -1
+                    msg = "GÖREV ZATEN AKTİF"
+                else:
+                    threading.Thread(target=mission_loop, daemon=True).start()
+                    r = 0
+                    msg = "GÖREV BAŞLATILDI"
+            elif val == "end":
+                r = mission_cancel()
+                msg = "GÖREV SONLANDIRILDI" if r == 0 else "AKTİF GÖREV YOK"
+            else:
+                r = -1
+                msg = "mission: start|end"
         else:
             self.send_response(400)
             self.end_headers()
@@ -903,6 +1053,12 @@ class Handler(BaseHTTPRequestHandler):
                                 for k, v in TARGET_POS.items()}
             s["track"] = {"id": TRACK_TARGET["id"],
                           "enabled": TRACK_TARGET["enabled"]}
+            s["mission"] = {"state": MISSION["state"],
+                            "active": MISSION["active"],
+                            "found": list(MISSION["found"]),
+                            "log": list(MISSION["log"]),
+                            "elapsed": int(time.time() - MISSION["start"])
+                            if MISSION["active"] else 0}
             body = json.dumps(s).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -911,9 +1067,25 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(body)
         elif self.path.startswith("/cam"):
-            with STATE_LOCK:
-                b64 = STATE.get("cam_jpeg", "")
-            raw = base64.b64decode(b64) if b64 else b""
+            # view=third → 3. şahıs kamera (ayrı render); default 1. şahıs
+            from urllib.parse import urlparse, parse_qs
+            q = parse_qs(urlparse(self.path).query)
+            view = q.get("view", ["first"])[0]
+            if view == "third":
+                with STATE_LOCK:
+                    dx, dy = STATE["drone_x"], STATE["drone_y"]
+                    yaw = STATE["drone_yaw"]
+                    alt = STATE["drone_alt"]
+                f3, _ = render_camera(dx, dy, yaw, alt, view="third")
+                det = {}
+                with STATE_LOCK:
+                    det = dict(STATE.get("det", {}))
+                b64 = _frame_to_jpeg(f3, det, RENDER_SCALE)
+                raw = base64.b64decode(b64)
+            else:
+                with STATE_LOCK:
+                    b64 = STATE.get("cam_jpeg", "")
+                raw = base64.b64decode(b64) if b64 else b""
             self.send_response(200)
             self.send_header("Content-Type", "image/jpeg")
             self.send_header("Cache-Control", "no-store")
